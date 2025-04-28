@@ -17,7 +17,7 @@ from app.database.models import Topic
 from app.filters.custom_filters import ChatTypeFilter, IsKeyInStateFilter, IsKeyNotInStateFilter
 from app.keyboards.inlines import get_inline_btns, get_pagination_btns
 from app.utils.custom_bot_class import Bot
-from app.utils.menu_processing import vocabulary
+from handlers.user_private.menu_processing import vocabulary
 from app.utils.paginator import pages, Paginator
 from app.common.fsm_classes import TopicFSM
 from app.common.tools import clear_auxiliary_msgs_in_chat, get_topic_info_for_caption, try_alert_msg, \

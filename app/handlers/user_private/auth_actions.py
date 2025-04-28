@@ -43,7 +43,7 @@ from app.common.fsm_classes import UserSettingsFSM, AuthFSM
 from app.common.tools import try_alert_msg, clear_all_data, update_user_chat_data, clear_auxiliary_msgs_in_chat
 from common.msg_templates import report_msg_template, oops_with_error_msg_template, action_cancelled_msg_template, \
     oops_try_again_msg_template
-from app.utils.menu_processing import auth_page, start_page
+from handlers.user_private.menu_processing import auth_page, start_page
 from common.tools import send_email_reset_psw_token
 from app.utils.custom_bot_class import Bot
 from app.utils.paginator import Paginator, pages

@@ -46,7 +46,7 @@ from app.filters.custom_filters import ChatTypeFilter, IsKeyInStateFilter
 from app.keyboards.inlines import get_inline_btns, get_pagination_btns, add_new_or_edit_word_main_btns, \
     get_kbds_with_navi_header_btns
 from app.utils.custom_bot_class import Bot
-from app.utils.menu_processing import vocabulary
+from handlers.user_private.menu_processing import vocabulary
 from app.utils.xsl_tools import export_vcb_data_to_xls_file, import_data_from_xls_file
 from app.utils.paginator import Paginator, pages
 from app.utils.tts import speak_text, clear_audio_examples_from_chat

@@ -41,7 +41,7 @@ from app.banners import banners_details as bnr
 from app.database.db import DataBase
 from app.filters.custom_filters import ChatTypeFilter, IsKeyInStateFilter
 from app.utils.custom_bot_class import Bot
-from app.utils.menu_processing import tests
+from handlers.user_private.menu_processing import tests
 from app.common.tools import get_topic_kbds_helper, get_word_phrase_caption_formatting, try_alert_msg
 from app.common.msg_templates import stat_msg_template, oops_with_error_msg_template
 from app.settings import PER_PAGE_INLINE_TOPICS

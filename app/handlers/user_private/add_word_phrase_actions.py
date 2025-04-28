@@ -33,7 +33,7 @@ from app.common.tools import re_send_msg_with_step, clear_auxiliary_msgs_in_chat
 from common.msg_templates import oops_with_error_msg_template, action_cancelled_msg_template, \
     context_validation_not_passed_msg_template, word_validation_not_passed_msg_template
 from app.database.models import WordPhrase
-from app.utils.menu_processing import add_new_word
+from handlers.user_private.menu_processing import add_new_word
 from app.settings import PLUG_TEMPLATE, PATTERN_WORD
 
 # Создаём роутер для приватного чата бота с пользователем
