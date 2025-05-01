@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.venv/
+.qodo
+.git/
+*.db
+*.log
+NOTES.md
+app/tg_app_base.db

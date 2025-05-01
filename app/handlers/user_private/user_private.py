@@ -13,7 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.filters.custom_filters import ChatTypeFilter
 from app.keyboards.inlines import MenuCallBack
 from app.database.db import DataBase
-from handlers.user_private.menu_processing import get_menu_content, start_page
+from app.handlers.user_private.menu_processing import get_menu_content, start_page
 from app.utils.custom_bot_class import Bot
 from app.settings import TEST_TYPES
 

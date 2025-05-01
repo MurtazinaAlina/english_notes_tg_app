@@ -1,0 +1,25 @@
+version: "3"
+
+volumes:
+  db-data:                                                        # Том для сохранения БД
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      BOT_TOKEN: ${BOT_TOKEN}
+      DB_LITE: "sqlite+aiosqlite:///data/tg_app_base.db"	        # Путь к БД для docker
+      SMTP_SERVER: ${SMTP_SERVER}
+      SMTP_PORT: ${SMTP_PORT}
+      SENDER_EMAIL: ${SENDER_EMAIL}
+      SENDER_PASSWORD: ${SENDER_PASSWORD}
+      SBER_AUTH: ${SBER_AUTH}
+      SBER_SCOPE: ${SBER_SCOPE}
+    volumes:
+      - db-data:/code/data                                          # Том только под БД
+    working_dir: /code
+    entrypoint: ["/bin/bash", "/code/entrypoint.sh"]
+    command: ["python", "-m", "app.main"]

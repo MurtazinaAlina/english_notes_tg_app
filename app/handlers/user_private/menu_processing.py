@@ -16,7 +16,7 @@ from app.keyboards.inlines import (get_kbds_start_page_btns, get_auth_btns, get_
                                    MenuCallBack, get_inline_btns, get_kbds_tests_btns)
 from app.utils.custom_bot_class import Bot
 from app.utils.tts import speak_text
-from settings import TEST_EN_RU_WORD, TEST_EN_RU_AUDIO, TEST_RU_EN_WORD
+from app.settings import TEST_EN_RU_WORD, TEST_EN_RU_AUDIO, TEST_RU_EN_WORD
 
 
 # Стартовая страница бота, приветствие + основное меню + кнопки аутентификации.

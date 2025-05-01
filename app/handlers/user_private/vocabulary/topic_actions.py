@@ -17,12 +17,12 @@ from app.database.models import Topic
 from app.filters.custom_filters import ChatTypeFilter, IsKeyInStateFilter, IsKeyNotInStateFilter
 from app.keyboards.inlines import get_inline_btns, get_pagination_btns
 from app.utils.custom_bot_class import Bot
-from handlers.user_private.menu_processing import vocabulary
+from app.handlers.user_private.menu_processing import vocabulary
 from app.utils.paginator import pages, Paginator
 from app.common.fsm_classes import TopicFSM
 from app.common.tools import clear_auxiliary_msgs_in_chat, get_topic_info_for_caption, try_alert_msg, \
     modify_callback_data, validate_topic_name
-from common.msg_templates import topic_msg_template, oops_with_error_msg_template, oops_try_again_msg_template, \
+from app.common.msg_templates import topic_msg_template, oops_with_error_msg_template, oops_try_again_msg_template, \
     action_cancelled_msg_template
 from app.handlers.user_private.tests_actions import tests_ask_select_topic
 from app.handlers.user_private.add_word_phrase_actions import add_word_ask_topic

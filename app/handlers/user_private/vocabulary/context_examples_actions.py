@@ -25,7 +25,7 @@ from app.utils.custom_bot_class import Bot
 from app.filters.custom_filters import ChatTypeFilter, IsKeyNotInStateFilter, IsKeyInStateFilter
 from app.common.tools import get_upd_word_and_cancel_page_from_context, get_word_phrase_caption_formatting, \
     clear_auxiliary_msgs_in_chat, try_alert_msg, validate_context_example
-from common.msg_templates import context_example_msg_template, oops_with_error_msg_template, \
+from app.common.msg_templates import context_example_msg_template, oops_with_error_msg_template, \
     context_validation_not_passed_msg_template
 from app.common.fsm_classes import WordPhraseFSM
 

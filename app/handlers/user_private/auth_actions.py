@@ -40,11 +40,11 @@ from app.database.db import DataBase
 from app.filters.custom_filters import ChatTypeFilter, IsKeyInStateFilter
 from app.keyboards.inlines import get_auth_btns, get_inline_btns, get_kbds_with_navi_header_btns, get_pagination_btns
 from app.common.fsm_classes import UserSettingsFSM, AuthFSM
-from app.common.tools import try_alert_msg, clear_all_data, update_user_chat_data, clear_auxiliary_msgs_in_chat
-from common.msg_templates import report_msg_template, oops_with_error_msg_template, action_cancelled_msg_template, \
+from app.common.tools import try_alert_msg, clear_all_data, update_user_chat_data, clear_auxiliary_msgs_in_chat, \
+    send_email_reset_psw_token
+from app.common.msg_templates import report_msg_template, oops_with_error_msg_template, action_cancelled_msg_template, \
     oops_try_again_msg_template
-from handlers.user_private.menu_processing import auth_page, start_page
-from common.tools import send_email_reset_psw_token
+from app.handlers.user_private.menu_processing import auth_page, start_page
 from app.utils.custom_bot_class import Bot
 from app.utils.paginator import Paginator, pages
 from app.utils.tts import speak_text

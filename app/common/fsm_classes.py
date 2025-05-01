@@ -3,7 +3,7 @@
 """
 from aiogram.fsm.state import State, StatesGroup
 
-from banners import banners_details
+from app.banners import banners_details
 
 
 # Класс состояний FSM для взаимодействия с AI-ассистентом

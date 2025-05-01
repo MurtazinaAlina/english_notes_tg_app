@@ -30,10 +30,10 @@ from app.utils.custom_bot_class import Bot
 from app.common.fsm_classes import WordPhraseFSM
 from app.common.tools import re_send_msg_with_step, clear_auxiliary_msgs_in_chat, clear_all_data, \
     get_word_phrase_caption_formatting, try_alert_msg, check_if_user_has_topics, validate_context_example
-from common.msg_templates import oops_with_error_msg_template, action_cancelled_msg_template, \
+from app.common.msg_templates import oops_with_error_msg_template, action_cancelled_msg_template, \
     context_validation_not_passed_msg_template, word_validation_not_passed_msg_template
 from app.database.models import WordPhrase
-from handlers.user_private.menu_processing import add_new_word
+from app.handlers.user_private.menu_processing import add_new_word
 from app.settings import PLUG_TEMPLATE, PATTERN_WORD
 
 # Создаём роутер для приватного чата бота с пользователем

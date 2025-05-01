@@ -93,7 +93,8 @@ class DataBase:
             try:
                 banner = Banner(
                     name=banner['name'],
-                    image_path=os.path.abspath(banner['image_path']),           # Абсолютный путь из относительного
+                    # image_path=os.path.abspath(banner['image_path']),           # Абсолютный путь из относительного
+                    image_path=banner['image_path'],
                     description=banner['description']
                 )
 
