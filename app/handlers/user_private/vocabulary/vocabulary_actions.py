@@ -977,7 +977,8 @@ async def edit_word_add_new_context_ask_text(callback: types.CallbackQuery, stat
 
 
 # Добавление нового введённого примера из add_new_context_ask_text, запрос завершения / дальнейших действий с примерами
-@vocabulary_router.message(WordPhraseFSM.context, IsKeyNotInStateFilter('editing_context_obj'))
+@vocabulary_router.message(WordPhraseFSM.context, IsKeyNotInStateFilter('editing_context_obj'),
+                           IsKeyInStateFilter('word_to_update'))
 async def edit_word_add_new_context_get_text(message: types.Message, state: FSMContext, session: AsyncSession,
                                              bot: Bot) -> None:
     """
