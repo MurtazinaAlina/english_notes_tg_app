@@ -325,7 +325,7 @@ def get_kbds_with_topic_btns(
     # Формируем клавиатуру с кнопками "На главную 🏠" и "Назад ⬅️" (если level > 1)
     keyboard = create_keyboard_with_header(level=level, menu_name='vocabulary')
 
-    # Добавляем кнопки с темами по переданному в аргументы словарю (срез текущей страницы + опционально пропуск)
+    # Добавляем кнопки с темами по переданному в аргументы словарю (срез текущей страницы)
     for text, value in btns.items():
         keyboard.add(InlineKeyboardButton(text=text, callback_data=value))
 
@@ -339,8 +339,8 @@ def get_kbds_with_topic_btns(
         level=level, menu_name=menu_name, menu_details=menu_details, page=page - 1).pack()
 
     # Для редактирования слова или тестирования корректируем значения callback_data
-    if (menu_details == 'tests_select_topic') or ('update_word_' in menu_details):
-        callback_data_next = f'{menu_details}_page_{page + 1}'                  # Сформирует update_word_{id}_page_2
+    if (menu_details == 'tests_select_topic') or ('edit_word_topic' in menu_details):
+        callback_data_next = f'{menu_details}_page_{page + 1}'                  # Сформирует edit_word_topic_page_2
         callback_data_previous = f'{menu_details}_page_{page - 1}'              # Или tests_select_topic_page_2
 
     # Добавляем кнопки пагинации тем

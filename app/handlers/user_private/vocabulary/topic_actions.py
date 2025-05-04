@@ -19,9 +19,9 @@ from app.keyboards.inlines import get_inline_btns, get_pagination_btns
 from app.utils.custom_bot_class import Bot
 from app.handlers.user_private.menu_processing import vocabulary
 from app.utils.paginator import pages, Paginator
-from app.common.fsm_classes import TopicFSM
+from app.common.fsm_classes import TopicFSM, WordPhraseFSM
 from app.common.tools import clear_auxiliary_msgs_in_chat, get_topic_info_for_caption, try_alert_msg, \
-    modify_callback_data, validate_topic_name
+    modify_callback_data, validate_topic_name, delete_last_message
 from app.common.msg_templates import topic_msg_template, oops_with_error_msg_template, oops_try_again_msg_template, \
     action_cancelled_msg_template
 from app.handlers.user_private.tests_actions import tests_ask_select_topic
@@ -59,8 +59,7 @@ async def find_topic_by_matches_ask_keywords(callback: types.CallbackQuery, stat
     )
     bot.auxiliary_msgs['user_msgs'][callback.message.chat.id].append(msg)
 
-    # Сохраняем баннер для редактирования и callback
-    bot.auxiliary_msgs['cbq_msg'][callback.message.chat.id] = callback.message
+    # Сохраняем callback
     bot.auxiliary_msgs['cbq'][callback.message.chat.id] = callback
 
     # Устанавливаем состояние ввода ключевого текста
@@ -85,14 +84,20 @@ async def cancel_find_topic(callback: types.CallbackQuery, state: FSMContext, se
 
     await callback.answer(action_cancelled_msg_template, show_alert=True)
 
-    # Убираем состояние ввода ключевого текста и чистим чат
+    # Убираем состояние ввода ключевого текста и чистим чат от информационного сообщения
     await state.set_state(None)
-    await clear_auxiliary_msgs_in_chat(bot, callback.message.chat.id)
+    await delete_last_message(bot, callback.message.chat.id)
 
     # Обрабатываем кейс добавления нового слова (слетает состояние ввода темы)
-    data = await state.get_data()
-    if data.get('add_new_word_key'):
+    state_data = await state.get_data()
+
+    # Логика при создании новой записи WordPhrase
+    if state_data.get('add_new_word_key'):
         await add_word_ask_topic(callback, state, session, bot)
+
+    # Логика при редактировании существующей записи WordPhrase
+    if state_data.get('word_to_update'):
+        await state.set_state(WordPhraseFSM.topic)
 
 
 # Применение фильтра по темам при выборе раздела в словаре И добавлении нового слова WordPhrase, тестировании.

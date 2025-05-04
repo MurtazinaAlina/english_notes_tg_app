@@ -14,20 +14,15 @@ INFO:
 3. При запросе прослушивания нового слова неактуальные аудио автоматически удаляются из чата.
 
 РЕДАКТИРОВАНИЕ записей WordPhrase.
-1. При выборе редактирования в FSMContext добавляется ключ "word_to_update" с редактируемым объектом WordPhrase.
-2. При редактировании новое значение, введённое пользователем, записывается в контекст с ключом по имени
-   атрибута таблицы.
-3. Сообщение с новым значением от пользователя удаляется и переотправляется ботом с указанием шага:
-   "Новая тема: {new_topic_name}"
-4. Это системное сообщение сохраняется в словарь bot.auxiliary_msgs['add_or_edit_word'][chat_id] с ключом
-   по имени ШАГА состояния State. Это позволяет удалять именно это сообщение при шаге назад
-5. При отмене редактирования происходит автоматическое перенаправление на последнюю просмотренную страницу словаря.
+1. При выборе редактирования в FSMContext добавляется ключ "word_to_update" с редактируемым объектом WordPhrase, он
+   используется для ветвления логики контроллеров.
+2. При отмене редактирования происходит автоматическое перенаправление на последнюю просмотренную страницу словаря.
    Дополнительный обработчик не требуется, переход прописан в callback_data кнопки отмены редактирования.
-6. Ключ для фильтра по темам при редактировании сохраняется в bot.topic_search_keywords[chat_id], НЕ в FSMContext.
-7. Поиск темы. Отправка сообщения с запросом ввода ключа поиска темы и отмена ввода обрабатываются в topic_actions.py:
+3. Ключ для фильтра по темам при редактировании сохраняется в bot.topic_search_keywords[chat_id], НЕ в FSMContext.
+4. Поиск темы. Отправка сообщения с запросом ввода ключа поиска темы и отмена ввода обрабатываются в topic_actions.py:
    find_topic_by_matches_ask_keywords          - запрос ключевого слова поиска темы
    cancel_find_topic                           - отмена поиска темы
-8. Редактирование примеров вынесено в context_examples_actions.py
+5. При редактировании примера в контекст добавляется ключ 'editing_context_obj' с редактируемым объектом Context.
 """
 import os
 import re
@@ -37,26 +32,24 @@ from typing import BinaryIO
 from aiogram import Router, F, types
 from aiogram.filters import StateFilter
 from aiogram.fsm.context import FSMContext
-from sqlalchemy import inspect
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.banners import banners_details
 from app.database.db import DataBase
-from app.filters.custom_filters import ChatTypeFilter, IsKeyInStateFilter
-from app.keyboards.inlines import get_inline_btns, get_pagination_btns, add_new_or_edit_word_main_btns, \
-    get_kbds_with_navi_header_btns
-from app.utils.custom_bot_class import Bot
+from app.filters.custom_filters import ChatTypeFilter, IsKeyInStateFilter, IsKeyNotInStateFilter
+from app.keyboards.inlines import get_inline_btns, get_pagination_btns, get_kbds_with_navi_header_btns
 from app.handlers.user_private.menu_processing import vocabulary
+from app.utils.custom_bot_class import Bot
 from app.utils.xsl_tools import export_vcb_data_to_xls_file, import_data_from_xls_file
 from app.utils.paginator import Paginator, pages
 from app.utils.tts import speak_text, clear_audio_examples_from_chat
-from app.common.tools import re_send_msg_with_step, get_upd_word_and_cancel_page_from_context, get_topic_kbds_helper, \
-    check_if_words_exist, get_word_phrase_caption_formatting, clear_auxiliary_msgs_in_chat, try_alert_msg, \
-    modify_callback_data
+from app.common.tools import get_upd_word_and_cancel_page_from_context, get_topic_kbds_helper, check_if_words_exist, \
+    get_word_phrase_caption_formatting, clear_auxiliary_msgs_in_chat, try_alert_msg, modify_callback_data, \
+    validate_context_example
 from app.common.msg_templates import word_msg_template, oops_with_error_msg_template, oops_try_again_msg_template, \
-    word_validation_not_passed_msg_template
+    word_validation_not_passed_msg_template, context_validation_not_passed_msg_template, context_example_msg_template
 from app.common.fsm_classes import WordPhraseFSM, TopicFSM, ImportXlsFSM
-from app.settings import PER_PAGE_VOCABULARY, PLUG_TEMPLATE, PATTERN_WORD
+from app.settings import PER_PAGE_VOCABULARY, PATTERN_WORD, PER_PAGE_INLINE_TOPICS
 
 
 # Создаём роутер для приватного чата бота с пользователем
@@ -582,166 +575,242 @@ async def delete_word_phrase_get_confirmation(callback: types.CallbackQuery, ses
 
 # РЕДАКТИРОВАНИЕ записей WordPhrase - UPDATE
 
-# Редактирование - ШАГ НАЗАД
-@vocabulary_router.callback_query(
-    StateFilter('*'), F.data == 'add_or_edit_word_step_back', IsKeyInStateFilter('word_to_update'))
-async def edit_word_step_back(callback: types.CallbackQuery, state: FSMContext, bot: Bot) -> None:
-    """
-    ШАГ НАЗАД. Возврат к предыдущему шагу редактирования слова/фразы WordPhrase.
-
-    :param callback: Callback-запрос формата "add_or_edit_word_step_back"
-    :param state: Контекст состояния с объектом WordPhrase в ключе 'word_to_update'
-    :param bot: Объект бота
-    :return: None
-    """
-
-    # Получаем данные из контекста
-    data = await state.get_data()
-    word_to_update, cancel_page = await get_upd_word_and_cancel_page_from_context(state)
-    first_topic, last_topic, total_topics = data.get('topic_info_for_caption', (None, None, None))
-
-    # Формируем описание баннера
-    caption_formatting_dict = await get_word_phrase_caption_formatting(word_to_update)
-    caption_formatting_dict = {
-        **caption_formatting_dict,
-        'first_topic': first_topic,
-        'last_topic': last_topic,
-        'topics_total': total_topics
-    }
-
-    # Определяем текущий шаг состояния
-    current_state = await state.get_state()
-    previous = None
-
-    # Проверяем каждое из состояний класса на соответствие текущему из FSM
-    for step in WordPhraseFSM.__all_states__:
-        if step.state == current_state:         # step.state  отображается как WordPhraseFSM:word  <класс>:<состояние>
-
-            # При совпадении устанавливаем предыдущее состояние (которое записали ранее, на предыдущей итерации)
-            await state.set_state(previous)
-            await callback.answer('⚠️ Вы вернулись к предыдущему шагу!', show_alert=True)
-
-            # Удаляем сообщение со значением из отменённого шага
-            try:
-                await bot.delete_message(
-                    chat_id=callback.from_user.id,
-                    message_id=bot.auxiliary_msgs['add_or_edit_word'][callback.message.chat.id][
-                        previous.state].message_id
-                )
-            except Exception as e:
-                print(e)
-
-            # Очищаем вспомогательные сообщения КРОМЕ лежащих в bot.auxiliary_msgs['edit_word'] (Для удаления примеров)
-            await clear_auxiliary_msgs_in_chat(bot, callback.message.chat.id, edit_context=True)
-
-            # Формируем клавиатуру предыдущего шага
-            if step.state == 'WordPhraseFSM:word':
-                kbds = bot.markup_user_topics[callback.message.chat.id]         # Для выбора темы клавиатура сохранена
-
-            else:                                                       # Для других шагов клавиатуру формируем
-                # Из предыдущего шага определяем название атрибута word_to_update для создания клавиатуры
-                attr_name = previous.state.split(':')[-1]
-                edit_value = getattr(word_to_update, attr_name)         # Получаем значение атрибута для вывода
-
-                # Формируем клавиатуру
-                btns = {'Редактировать значение ✏️': edit_value}
-                kbds = add_new_or_edit_word_main_btns(
-                    pass_step=True, level=2, sizes=(2, 1, 1, 2), cancel_page_address=cancel_page, btns=btns
-                )
-
-            # Редактируем баннер и клавиатуру
-            await bot.auxiliary_msgs['cbq_msg'][callback.message.chat.id].edit_caption(
-                caption=(WordPhraseFSM.edit_word_caption[previous.state].format(**caption_formatting_dict)),
-                reply_markup=kbds
-            )
-            break
-
-        # Сохраняем шаг как предыдущий при несовпадении состояния
-        previous = step
-
-
-# Редактирование - ШАГ 1: пропуск или выбор новой темы
+# Редактирование слова/фразы - ШАГ 1, вызов основного окна редактирования записи с выбором действия.
+# Обработчик также принудительно вызывается после изменения данных, добавления нового примера
 @vocabulary_router.callback_query(F.data.startswith('update_word_'))
-async def update_word_phrase_ask_topic(
-        callback: types.CallbackQuery, session: AsyncSession, state: FSMContext, bot: Bot) -> None:
+async def edit_word_phrase_main(callback: types.CallbackQuery, state: FSMContext, bot: Bot, session: AsyncSession) \
+        -> None:
     """
-    Редактирование слова/фразы WordPhrase - шаг 1, запрос темы.
-    Функция позволяет пропустить шаг или выбрать новую тему Topic.
+    Редактирование слова/фразы WordPhrase - ШАГ 1, вызов основного окна редактирования с выбором действия.
+    Обработчик также принудительно вызывается после изменения данных, добавления нового примера.
 
-    Если применялся фильтр по темам, то ключ для поиска сохранён в bot.topic_search_keywords[chat_id].
-
-    :param callback: Callback-запрос формата:
-                    "update_word_{word_id}" ИЛИ "update_word_{word_id}_page_{page_number}" при пагинации
-    :param session: Пользовательская сессия
-    :param state: Контекст состояния
+    :param callback: CallbackQuery-запрос формата "update_word_{WordPhrase.id}"
+    :param state: Контекст состояния FSM с ключом "page_address" с адресом текущей страницы просмотра записей
     :param bot: Объект бота
+    :param session: Пользовательская сессия
     :return: None
     """
-
-    # Получаем данные из контекста
-    word_to_update, cancel_page_address = await get_upd_word_and_cancel_page_from_context(state)
-    word_id = word_to_update.id if word_to_update else None
-
-    # Если это первичный вызов обработчика по кнопке "Изменить"
-    if callback.data.startswith('update_word_'):
-
-        # Получаем слово/фразу по id из callback по N элемента
-        word_id = int(callback.data.split('_')[2])
-        word_to_update = await DataBase.get_word_phrase_by_id(session, word_id)
-
-        # Если слово/фраза не найдено, выходим из обработчика
-        if word_to_update is None:
-            await callback.answer('⚠️ Слово/фраза не найдены!', show_alert=True)
-            return
-
-        # Записываем изменяемое слово/фразу в контекст состояния
-        await state.update_data(word_to_update=word_to_update)
-
-    # Получаем номер текущей страницы
-    if '_page_' in callback.data:
-        page = int(callback.data.split('_')[-1])
-    else:
-        page = 1
-
-    # Настраиваем параметры пагинации
-    per_page = 4
-
-    # Формируем клавиатуру и информацию о темах для баннера
-    search_key = bot.topic_search_keywords.get(callback.message.chat.id)
-    topic_name_prefix = 'updated_word_topic_'
-    pass_btn = {'Оставить текущую тему ▶': f'updated_word_topic_{str(word_to_update.topic_id)}'}  # Кнопка текущей темы
-    kbds, topic_info_for_caption = await get_topic_kbds_helper(
-        bot, chat_id=callback.message.chat.id, session=session, level=2, menu_name='vocabulary',
-        menu_details=f'update_word_{word_id}', topic_name_prefix=topic_name_prefix, search_key=search_key, page=page,
-        per_page=per_page, cancel_possible=True, cancel_page_address=cancel_page_address, sizes=(2, 1, 2),
-        pass_btn=pass_btn
-    )
-
-    # Формируем описание баннера для дальнейшего изменения
-    caption = banners_details.update_word_step_1.format(
-            word=word_to_update.word, topic=word_to_update.topic.name, **topic_info_for_caption
-        )
-
-    # Записываем данные о темах в контекст - для корректного отображения в ШАГ НАЗАД
-    await state.update_data(topic_info_for_caption=(topic_info_for_caption.values()))
-
-    # Редактируем баннер и клавиатуру
-    await bot.auxiliary_msgs['cbq_msg'][callback.message.chat.id].edit_caption(caption=caption, reply_markup=kbds)
-
-    # Сохраняем клавиатуру и callback
     bot.auxiliary_msgs['cbq'][callback.message.chat.id] = callback
-    bot.markup_user_topics[callback.message.chat.id] = kbds                              # Для перехода "шаг назад"
 
     # Чистим чат
     await clear_auxiliary_msgs_in_chat(bot, callback.message.chat.id)
 
-    # Переходим в состояние выбора темы
+    # Получаем слово/фразу по id из callback
+    word_id = int(callback.data.split('_')[-1])
+    word_to_update = await DataBase.get_word_phrase_by_id(session, word_id)
+
+    # Если слово/фраза не найдено, выходим из обработчика
+    if word_to_update is None:
+        await callback.answer('⚠️ Слово/фраза не найдены!', show_alert=True)
+        return
+
+    # Записываем редактируемое слово/фразу в контекст состояния
+    await state.update_data(word_to_update=word_to_update)
+
+    # Формируем и сохраняем клавиатуру
+    _, cancel_page_address = await get_upd_word_and_cancel_page_from_context(state)
+    btns = {
+        'Тема 🖌': 'edit_word_topic_page_1',
+        'Слово/фраза 🖌': 'edit_word:word',
+        'Транскрипция 🖌': 'edit_word:transcription',
+        'Перевод 🖌': 'edit_word:translate',
+        'Примеры 🖌': 'edit_word_examples',
+        'Новый пример ➕': 'edit_word_add_new_example',
+        'Вернуться к просмотру словаря ⬅': cancel_page_address,
+    }
+    kbds = get_kbds_with_navi_header_btns(level=2, btns=btns, menu_name='vocabulary', sizes=(2, 2, 2, 2, 1))
+    bot.reply_markup_save[callback.message.chat.id] = kbds
+
+    # Редактируем баннер и клавиатуру
+    caption_formatting = await get_word_phrase_caption_formatting(word_phrase_obj=word_to_update)
+    caption = banners_details.update_word_main.format(**caption_formatting)
+    await bot.auxiliary_msgs['cbq_msg'][callback.message.chat.id].edit_caption(caption=caption, reply_markup=kbds)
+
+
+# Редактирование слова/фразы - отмена ввода данных, возврат к основному меню редактирования записи
+@vocabulary_router.callback_query(F.data == 'return_to_edit_word_main', IsKeyInStateFilter('word_to_update'))
+async def return_to_edit_word_main(callback: types.CallbackQuery, bot: Bot, state: FSMContext) -> None:
+    """
+    Редактирование слова/фразы - отмена ввода данных, возврат к основному меню редактирования записи.
+
+    :param callback: CallbackQuery-запрос формата "return_to_edit_word_main"
+    :param bot: Объект бота
+    :param state: Контекст состояния FSM с ключом "word_to_update"
+    :return: None
+    """
+    bot.auxiliary_msgs['cbq'][callback.message.chat.id] = callback
+    await callback.answer('⚠️ Действие отменено!', show_alert=True)
+    await clear_auxiliary_msgs_in_chat(bot, callback.message.chat.id)
+
+    # Если была отмена выбора/поиска темы, возвращаем основную клавиатуру
+    state_now = await state.get_state()
+    if state_now == 'WordPhraseFSM:topic' or state_now == 'TopicFSM:search_keywords':
+        await bot.auxiliary_msgs['cbq_msg'][callback.message.chat.id].edit_reply_markup(
+            reply_markup=bot.reply_markup_save[callback.message.chat.id]
+        )
+
+    # Сбрасываем состояние ввода
+    await state.set_state(None)
+
+
+# Редактирование слова/фразы - изменение слова, транскрипции или перевода, ШАГ 1: запрос новых данных
+@vocabulary_router.callback_query(F.data.startswith('edit_word:'), IsKeyInStateFilter('word_to_update'))
+async def edit_word_transcription_translate_ask_for_data(callback: types.CallbackQuery, state: FSMContext, bot: Bot) \
+        -> None:
+    """
+    Редактирование слова/фразы - изменение слова, транскрипции или перевода, ШАГ 1: запрос новых данных.
+
+    :param callback: CallbackQuery-запрос формата "edit_word:<атрибут>"
+    :param state: Контекст состояния FSM с ключом "word_to_update"
+    :param bot: Объект бота
+    :return: None
+    """
+    bot.auxiliary_msgs['cbq'][callback.message.chat.id] = callback
+
+    # Чистим чат
+    await clear_auxiliary_msgs_in_chat(bot, callback.message.chat.id)
+
+    # Забираем из контекста информацию о редактируемой записи
+    state_data = await state.get_data()
+    edited_word_obj = state_data.get('word_to_update')
+
+    # Из callback забираем название редактируемого атрибута
+    edited_attr = callback.data.split(':')[-1]
+
+    # Получаем текущее значение атрибута для вывода в клавиатуре
+    current_data = getattr(edited_word_obj, edited_attr)
+
+    # Отправляем информационное сообщение с кнопкой отмены и вывода текущих данных
+    btns = {
+        'Отмена ❌': 'return_to_edit_word_main',
+        'Текст сейчас 📝': f'switch_inline_query_current_chat_{current_data}'
+    }
+    kbds = get_inline_btns(btns=btns)
+    attrs_dict = {
+        'word': 'слова/фразы',
+        'transcription': 'транскрипции',
+        'translate': 'перевода'
+    }
+    msg_text = (f'Введите <b>новое значение {attrs_dict.get(edited_attr)}</b> или нажмите <i>"Текст сейчас 📝"</i> '
+                f'для подгрузки в строку ввода текущих данных для удобной корректировки.')
+    msg = await callback.message.answer(text=msg_text, reply_markup=kbds)
+    bot.auxiliary_msgs['user_msgs'][callback.message.chat.id].append(msg)
+
+    # Определяем требуемое состояние ввода и устанавливаем его
+    required_state = getattr(WordPhraseFSM, edited_attr)
+    await state.set_state(required_state)
+
+
+# Редактирование слова/фразы - изменение слова, транскрипции или перевода, ШАГ 2: новые данные получены, обновление в БД
+@vocabulary_router.message(StateFilter(WordPhraseFSM.word, WordPhraseFSM.transcription, WordPhraseFSM.translate),
+                           IsKeyInStateFilter('word_to_update'))
+async def edit_word_get_data_except_topic_or_context(
+        message: types.Message, state: FSMContext, bot: Bot, session: AsyncSession) -> None:
+    """
+    Редактирование слова/фразы - изменение слова, транскрипции или перевода, ШАГ 2: новые данные получены,
+    обновление в БД.
+
+    :param message: Текстовое сообщение с новыми данными
+    :param state: Контекст состояния FSM с ключом "word_to_update"
+    :param bot: Объект бота
+    :param session: Пользовательская сессия
+    :return: None
+    """
+    bot.auxiliary_msgs['user_msgs'][message.chat.id].append(message)
+
+    # Из контекста забираем название редактируемого атрибута
+    current_state = await state.get_state()             # WordPhraseFSM:transcription | WordPhraseFSM:translate | ...
+    attr_name = current_state.split(':')[-1]
+
+    # Делаем валидацию введённого значения
+    if current_state == WordPhraseFSM.word:
+        if not re.match(PATTERN_WORD, message.text):
+            msg_text = word_validation_not_passed_msg_template
+            await try_alert_msg(bot, message.chat.id, msg_text, if_error_send_msg=True)
+            await bot.delete_message(message.chat.id, message.message_id)
+            return
+
+    # Удаляем сообщение с данными от пользователя и информационное сообщение с кнопками
+    await clear_auxiliary_msgs_in_chat(bot, message.chat.id)
+
+    # Забираем из контекста информацию о редактируемой записи
+    state_data = await state.get_data()
+    edited_word_obj = state_data.get('word_to_update')
+
+    # Обновляем данные заметки в БД и выводим уведомление
+    try:
+        is_updated = await DataBase.update_word_phrase(session, edited_word_obj.id, {attr_name: message.text})
+    except (Exception, ) as e:
+        msg_text = oops_with_error_msg_template.format(error=str(e))
+        await try_alert_msg(bot, message.chat.id, msg_text, if_error_send_msg=True)
+        return
+
+    if is_updated:
+        await try_alert_msg(bot, message.chat.id, '✅ Данные успешно обновлены!', if_error_send_msg=True)
+    else:
+        await try_alert_msg(bot, message.chat.id, oops_try_again_msg_template, if_error_send_msg=True)
+
+    # Возвращаемся к основному окну редактирования записи
+    modified_callback = await modify_callback_data(
+        bot.auxiliary_msgs['cbq'][message.chat.id], f'update_word_{edited_word_obj.id}'
+    )
+    await edit_word_phrase_main(modified_callback, state, bot, session)
+
+
+# Редактирование слова/фразы - изменение темы, ШАГ 1: запрос новой темы.
+# Обработчик также принудительно вызывается после применения/отмены фильтра по темам, при пагинации списка тем
+@vocabulary_router.callback_query(F.data.startswith('edit_word_topic_page_'), IsKeyInStateFilter('word_to_update'))
+async def edit_word_ask_for_topic(callback: types.CallbackQuery, state: FSMContext, bot: Bot, session: AsyncSession) \
+        -> None:
+    """
+    Редактирование слова/фразы - изменение темы, ШАГ 1: запрос новой темы.
+    Обработчик также принудительно вызывается после применения/отмены фильтра по темам, при пагинации списка тем.
+
+    :param callback: CallbackQuery-запрос формата 'edit_word_topic_page_<page_number>'
+    :param state: Контекст состояния FSM с ключом "word_to_update"
+    :param bot: Объект бота
+    :param session: Пользовательская сессия
+    :return: None
+    """
+    bot.auxiliary_msgs['cbq'][callback.message.chat.id] = callback
+
+    # Забираем из контекста информацию о редактируемой записи
+    state_data = await state.get_data()
+    edited_word_obj = state_data.get('word_to_update')
+
+    # Чистим чат
+    await clear_auxiliary_msgs_in_chat(bot, callback.message.chat.id)
+
+    # Формируем клавиатуру и информацию о темах
+    page = int(callback.data.split('_')[-1])
+    per_page = PER_PAGE_INLINE_TOPICS
+    search_key = bot.topic_search_keywords.get(callback.message.chat.id)
+    topic_name_prefix = 'updated_word_topic_'
+    kbds, topic_info_for_caption = await get_topic_kbds_helper(
+        bot, chat_id=callback.message.chat.id, session=session, level=2, menu_name='vocabulary',
+        menu_details=f'edit_word_topic', topic_name_prefix=topic_name_prefix, search_key=search_key, page=page,
+        per_page=per_page, sizes=(2,)
+    )
+
+    # Редактируем клавиатуру баннера
+    await bot.auxiliary_msgs['cbq_msg'][callback.message.chat.id].edit_reply_markup(reply_markup=kbds)
+
+    # Отправляем информационное сообщение с кнопкой отмены и вывода текущих данных
+    msg_text = ('Выберите новое значение темы.\n\n'
+                'Текущая тема выбрана: <b>"{topic}"</b>\n'
+                'Показаны темы {first_topic}-{last_topic} из {topics_total}')
+    msg_text = msg_text.format(**topic_info_for_caption, topic=edited_word_obj.topic.name)
+    info_msg_kbds = get_inline_btns(btns={'Отмена ❌': 'return_to_edit_word_main'})
+    msg = await callback.message.answer(text=msg_text, reply_markup=info_msg_kbds)
+    bot.auxiliary_msgs['user_msgs'][callback.message.chat.id].append(msg)
+
+    # Устанавливаем состояние ввода темы
     await state.set_state(WordPhraseFSM.topic)
 
 
-# Редактирование - ШАГ 1.5: ПРИМЕНЕНИЕ фильтра по темам
+# Редактирование слова/фразы - изменение темы, ШАГ 1.5: ПРИМЕНЕНИЕ фильтра по темам
 @vocabulary_router.message(F.text, StateFilter(TopicFSM.search_keywords), IsKeyInStateFilter('word_to_update'))
-async def find_topic_by_matches_get_keywords(
+async def edit_word_find_topic_by_matches_get_keywords(
         message: types.Message, session: AsyncSession, state: FSMContext, bot: Bot) -> None:
     """
     Редактирование слова/фразы WordPhrase - Обработка фильтра по темам.
@@ -761,13 +830,16 @@ async def find_topic_by_matches_get_keywords(
     # Сохраняем сообщение во вспомогательные
     bot.auxiliary_msgs['user_msgs'][message.chat.id].append(message)
 
-    # Вызываем обработчик выбора темы при редактировании записи WordPhrase
-    await update_word_phrase_ask_topic(bot.auxiliary_msgs['cbq'][message.chat.id], session, state, bot)
+    # Возвращаемся к окну редактирования записи - выбор темы
+    modified_callback = await modify_callback_data(
+        bot.auxiliary_msgs['cbq'][message.chat.id], 'edit_word_topic_page_1'
+    )
+    await edit_word_ask_for_topic(modified_callback, state, bot, session)
 
 
-# Редактирование - ШАГ 1.5: ОТМЕНА фильтра по темам
+# Редактирование слова/фразы - изменение темы, ШАГ 1.5: ОТМЕНА фильтра по темам
 @vocabulary_router.callback_query(F.data == 'cancel_find_topic_by_matches', IsKeyInStateFilter('word_to_update'))
-async def cancel_find_topic_by_matches(
+async def edit_word_cancel_find_topic_by_matches(
         callback: types.CallbackQuery, session: AsyncSession, state: FSMContext, bot: Bot) -> None:
     """
     Редактирование слова/фразы WordPhrase - Обработка отмены фильтра по темам.
@@ -785,358 +857,375 @@ async def cancel_find_topic_by_matches(
     # Удаляем ключевое слово из атрибута бота
     bot.topic_search_keywords[callback.message.chat.id] = None
 
-    # Вызываем обработчик выбора темы при редактировании записи WordPhrase
-    await update_word_phrase_ask_topic(callback, session, state, bot)
+    # Возвращаемся к окну редактирования записи - выбор темы
+    modified_callback = await modify_callback_data(
+        bot.auxiliary_msgs['cbq'][callback.message.chat.id], 'edit_word_topic_page_1'
+    )
+    await edit_word_ask_for_topic(modified_callback, state, bot, session)
 
 
-# Редактирование - ШАГ 2: тема получена, запрос слова / пропуска шага со словом
+# Редактирование слова/фразы - изменение темы, ШАГ 2: ПРИМЕНЕНИЕ выбора темы, обновление в БД
 @vocabulary_router.callback_query(WordPhraseFSM.topic, IsKeyInStateFilter('word_to_update'))
-async def update_word_get_topic_ask_word(
+async def edit_word_get_new_topic(
         callback: types.CallbackQuery, session: AsyncSession, state: FSMContext, bot: Bot) -> None:
     """
-    Редактирование слова/фразы WordPhrase - шаг 2, получение темы и запрос слова/фразы.
-    Функция позволяет запросить новое написание слова/фразы или пропустить шаг.
+    Редактирование слова/фразы - изменение темы, ШАГ 2: ПРИМЕНЕНИЕ выбора темы, обновление в БД.
 
-    :param callback: Callback запрос формата:
-                    "updated_word_topic_{topic_id}" (и для заново выбранной темы, и для пропуска шага)
+    :param callback: Callback-запрос формата "updated_word_topic_{Topic.id}"
     :param session: Пользовательская сессия
-    :param state: Контекст состояния
+    :param state: Контекст состояния FSM с ключом 'word_to_update'
     :param bot: Объект бота
     :return: None
     """
+    bot.auxiliary_msgs['cbq'][callback.message.chat.id] = callback
 
     # Получаем данные из контекста
-    word_to_update, cancel_page = await get_upd_word_and_cancel_page_from_context(state)
+    edited_word_obj, _ = await get_upd_word_and_cancel_page_from_context(state)
 
     # Получаем id выбранной темы из callback и находим тему
     topic_id = int(callback.data.replace('updated_word_topic_', ''))
     new_topic = await DataBase.get_topic_by_id(session=session, topic_id=topic_id)
 
-    # Если тема изменилась, отправляем сообщение в чат и сохраняем его во вспомогательные с шагом в виде ключа
-    if new_topic.id != word_to_update.topic_id:
-        msg = await callback.message.answer(text=f'<b>Новая тема:</b> {new_topic.name}')
-        edit_word_state = await state.get_state()                           # Получаем состояние для названия ключа
-        bot.auxiliary_msgs['add_or_edit_word'][callback.message.chat.id][edit_word_state] = msg
-
-    # Записываем id выбранной темы в контекст состояния
-    await state.update_data(topic_id=topic_id)
-
-    # Редактируем баннер и клавиатуру
-    btns = {'Редактировать значение ✏️': word_to_update.word}
-    kbds = add_new_or_edit_word_main_btns(
-        pass_step=True, level=2, sizes=(2, 1, 1, 2), cancel_page_address=cancel_page, btns=btns
-    )
-    caption = await get_word_phrase_caption_formatting(word_phrase_obj=word_to_update)
-    await callback.message.edit_caption(
-        caption=banners_details.update_word_step_2.format(**caption), reply_markup=kbds
-    )
-
-    # Сохраняем callback
-    bot.auxiliary_msgs['cbq'][callback.message.chat.id] = callback
-
-    # Переходим в состояние ввода слова
-    await state.set_state(WordPhraseFSM.word)
-
-
-# Редактирование - ШАГ 3: отредактированное слово получено, запрос транскрипции / пропуска шага с транскрипцией
-@vocabulary_router.message(WordPhraseFSM.word, IsKeyInStateFilter('word_to_update'))
-async def update_word_get_word_ask_transcription(message: types.Message, state: FSMContext, bot: Bot) -> None:
-    """
-    Редактирование слова/фразы WordPhrase - шаг 3, получение отредактированного слова/фразы и запрос транскрипции.
-    Функция позволяет запросить новую транскрипцию или пропустить шаг.
-
-    :param message: Сообщение пользователя с отредактированным словом/фразой
-    :param state: Контекст состояния
-    :param bot: Объект бота
-    :return: None
-    """
-
-    # Делаем валидацию введённого значения
-    if not re.match(PATTERN_WORD, message.text):
-        msg_text = word_validation_not_passed_msg_template
-        await try_alert_msg(bot, message.chat.id, msg_text, if_error_send_msg=True)
-        await bot.delete_message(message.chat.id, message.message_id)
+    if new_topic.id == edited_word_obj.topic_id:
+        await try_alert_msg(bot, callback.message.chat.id, '⚠️ Тема не изменилась!', if_error_send_msg=True)
         return
 
-    # Записываем слово/фразу в контекст состояния
-    await state.update_data(word=message.text)
+    # Обновляем данные заметки в БД и выводим уведомление
+    try:
+        is_updated = await DataBase.update_word_phrase(session, edited_word_obj.id, {'topic_id': topic_id})
+    except (Exception, ) as e:
+        await try_alert_msg(bot, callback.message.chat.id, oops_with_error_msg_template.format(error=str(e)),
+                            if_error_send_msg=True)
+        return
 
-    # Переотправка сообщения с новыми данными с пометкой шага
-    await re_send_msg_with_step(message=message, bot=bot, state=state, msg_text='<b>Новое значение:</b>')
+    if is_updated:
+        await try_alert_msg(bot, callback.message.chat.id, '✅ Данные успешно обновлены!', if_error_send_msg=True)
+    else:
+        await try_alert_msg(bot, callback.message.chat.id, oops_try_again_msg_template, if_error_send_msg=True)
 
-    # Получаем данные из контекста
-    word_to_update, cancel_page = await get_upd_word_and_cancel_page_from_context(state)
-
-    # Редактируем баннер и клавиатуру
-    btns = {'Редактировать значение ✏️': word_to_update.transcription}
-    kbds = add_new_or_edit_word_main_btns(
-        pass_step=True, level=2, sizes=(2, 1, 1, 2), cancel_page_address=cancel_page, btns=btns
+    # Возвращаемся к основному окну редактирования записи
+    modified_callback = await modify_callback_data(
+        bot.auxiliary_msgs['cbq'][callback.message.chat.id], f'update_word_{edited_word_obj.id}'
     )
-    caption = await get_word_phrase_caption_formatting(word_phrase_obj=word_to_update)
-    await bot.auxiliary_msgs['cbq_msg'][message.chat.id].edit_caption(
-        caption=banners_details.update_word_step_3.format(**caption), reply_markup=kbds
-    )
-
-    # Сохраняем клавиатуру
-    bot.reply_markup_save[message.chat.id] = kbds
-
-    # Переходим в состояние ввода транскрипции
-    await state.set_state(WordPhraseFSM.transcription)
+    await edit_word_phrase_main(modified_callback, state, bot, session)
 
 
-# Редактирование - ШАГ 3 VAR: этап редактирования слова пропущен, запрос транскрипции / пропуска шага с транскрипцией
-@vocabulary_router.callback_query(WordPhraseFSM.word, IsKeyInStateFilter('word_to_update'), F.data.contains('pass'))
-async def update_word_pass_word_ask_transcription(callback: types.CallbackQuery, state: FSMContext, bot: Bot) -> None:
+# РЕДАКТИРОВАНИЕ - РАБОТА С ПРИМЕРАМИ
+
+# Редактирование слова/фразы - просмотр примеров Context.
+# Обработчик также принудительно вызывается после отмены изменений примеров, завершения удаления/редактирования примера
+@vocabulary_router.callback_query(F.data == 'edit_word_examples', IsKeyInStateFilter('word_to_update'))
+async def edit_word_show_examples(callback: types.CallbackQuery, state: FSMContext, bot: Bot) -> None:
     """
-    Редактирование слова/фразы WordPhrase - шаг 3 VAR: этап редактирования слова пропущен, запрос транскрипции.
-    Функция позволяет запросить новую транскрипцию или пропустить шаг.
+    Редактирование слова/фразы - просмотр примеров Context.
+    Обработчик также принудительно вызывается после отмены изменений примеров, завершения удаления/редактирования
+    примера.
 
-    :param callback: Callback запрос формата "pass"
-    :param state: Контекст состояния
+    Функция выводит в чат сообщения с информацией о примерах с доступом к редактированию/удалению.
+
+    :param callback: Callback-запрос формата "edit_word_examples"
+    :param state: Контекст состояния с объектом WordPhrase в ключе 'word_to_update'
     :param bot: Объект бота
     :return: None
     """
-
-    # Получаем данные из контекста
-    word_to_update, cancel_page = await get_upd_word_and_cancel_page_from_context(state)
-
-    # Записываем в контекст состояния атрибут word
-    await state.update_data(word=word_to_update.word)
-
-    # Редактируем баннер и клавиатуру
-    btns = {'Редактировать значение ✏️': word_to_update.transcription}
-    kbds = add_new_or_edit_word_main_btns(
-        pass_step=True, level=2, sizes=(2, 1, 1, 2), cancel_page_address=cancel_page, btns=btns
-    )
-    caption = await get_word_phrase_caption_formatting(word_phrase_obj=word_to_update)
-    await bot.auxiliary_msgs['cbq_msg'][callback.message.chat.id].edit_caption(
-        caption=banners_details.update_word_step_3.format(**caption), reply_markup=kbds
-    )
-
-    # Сохраняем callback
     bot.auxiliary_msgs['cbq'][callback.message.chat.id] = callback
 
-    # Переходим в состояние ввода транскрипции
-    await state.set_state(WordPhraseFSM.transcription)
+    # Получаем данные из контекста
+    word_to_update, _ = await get_upd_word_and_cancel_page_from_context(state)
+
+    # Очищаем сообщения в чате
+    await clear_auxiliary_msgs_in_chat(bot, callback.message.chat.id)
+
+    # Отправляем в чат примеры с inline кнопками редактирования/удаления
+    for example in word_to_update.context:
+        msg = await callback.message.answer(
+            text=context_example_msg_template.format(
+                example=example.example, created=example.created, updated=example.updated
+            ),
+            reply_markup=get_inline_btns(
+                btns={'Изменить 🖌': f'update_context_{example.id}', 'Удалить 🗑': f'delete_context_{example.id}'})
+        )
+        bot.auxiliary_msgs['user_msgs'][callback.message.chat.id].append(msg)
 
 
-# Редактирование - ШАГ 4: транскрипция получена, запрос перевода / пропуска шага с переводом
-@vocabulary_router.message(WordPhraseFSM.transcription, IsKeyInStateFilter('word_to_update'))
-async def update_word_get_transcription_ask_translation(message: types.Message, state: FSMContext, bot: Bot) -> None:
+# ДОБАВЛЕНИЕ ПРИМЕРА
+
+# Редактирование WordPhrase - добавить НОВЫЙ пример Context
+@vocabulary_router.callback_query(F.data.startswith('edit_word_add_new_example'), IsKeyInStateFilter('word_to_update'))
+async def edit_word_add_new_context_ask_text(callback: types.CallbackQuery, state: FSMContext, bot: Bot) -> None:
     """
-    Редактирование слова/фразы WordPhrase - шаг 4, получение транскрипции и запрос перевода.
-    Функция позволяет запросить новый перевод или пропустить шаг.
+    Редактирование WordPhrase - добавить НОВЫЙ пример Context.
 
-    :param message: Сообщение пользователя с отредактированной транскрипцией
-    :param state: Контекст состояния
+    :param callback: Callback-запрос формата "edit_word_add_new_example"
+    :param state: Контекст состояния с объектом WordPhrase в ключе 'word_to_update'
     :param bot: Объект бота
     :return: None
     """
-
-    # Переотправка сообщения с новыми данными с пометкой шага
-    await re_send_msg_with_step(message=message, bot=bot, state=state, msg_text='<b>Новая транскрипция:</b>')
-
-    # Записываем транскрипцию в контекст состояния
-    transcription = message.text if len(message.text) > 1 else PLUG_TEMPLATE
-    await state.update_data(transcription=transcription)
-
-    # Получаем данные из контекста
-    word_to_update, cancel_page = await get_upd_word_and_cancel_page_from_context(state)
-
-    # Редактируем баннер и клавиатуру
-    btns = {'Редактировать значение ✏️': word_to_update.translate}
-    kbds = add_new_or_edit_word_main_btns(
-        pass_step=True, level=2, sizes=(2, 1, 1, 2), cancel_page_address=cancel_page, btns=btns
-    )
-    caption = await get_word_phrase_caption_formatting(word_phrase_obj=word_to_update)
-    await bot.auxiliary_msgs['cbq_msg'][message.chat.id].edit_caption(
-        caption=banners_details.update_word_step_4.format(**caption), reply_markup=kbds
-    )
-
-    # Переходим в состояние ввода перевода
-    await state.set_state(WordPhraseFSM.translate)
-
-
-# Редактирование - ШАГ 4 VAR: этап редактирования транскрипции пропущен, запрос перевода / пропуска шага с переводом
-@vocabulary_router.callback_query(
-    WordPhraseFSM.transcription, IsKeyInStateFilter('word_to_update'), F.data.contains('pass'))
-async def update_word_pass_transcription_ask_translate(callback: types.CallbackQuery, state: FSMContext, bot: Bot) \
-        -> None:
-    """
-    Редактирование слова/фразы WordPhrase - шаг 4 VAR: этап редактирования транскрипции пропущен, запрос перевода.
-    Функция позволяет запросить новый перевод или пропустить шаг.
-
-    :param callback: Callback запрос формата "pass"
-    :param state: Контекст состояния
-    :param bot: Объект бота
-    :return: None
-    """
-
-    # Получаем данные из контекста
-    word_to_update, cancel_page = await get_upd_word_and_cancel_page_from_context(state)
-
-    # Записываем в контекст состояния атрибут transcription
-    await state.update_data(transcription=word_to_update.transcription)
-
-    # Редактируем баннер и клавиатуру
-    btns = {'Редактировать значение ✏️': word_to_update.translate}
-    kbds = add_new_or_edit_word_main_btns(
-        pass_step=True, level=2, sizes=(2, 1, 1, 2), cancel_page_address=cancel_page, btns=btns
-    )
-    caption = await get_word_phrase_caption_formatting(word_phrase_obj=word_to_update)
-    await bot.auxiliary_msgs['cbq_msg'][callback.message.chat.id].edit_caption(
-        caption=banners_details.update_word_step_4.format(**caption), reply_markup=kbds
-    )
-
-    # Сохраняем callback
     bot.auxiliary_msgs['cbq'][callback.message.chat.id] = callback
 
-    # Переходим в состояние ввода перевода
-    await state.set_state(WordPhraseFSM.translate)
+    # Удаляем из чата сообщения с примерами и информационные сообщения (если есть)
+    await clear_auxiliary_msgs_in_chat(bot, callback.message.chat.id)
 
+    # Отправляем информационное сообщение с запросом ввода и кнопкой отмены действия
+    kbds = get_inline_btns(btns={'Отмена ❌': 'return_to_edit_word_main'})
+    msg_text = 'Введите текст <b>нового примера</b>'
+    msg = await callback.message.answer(text=msg_text, reply_markup=kbds)
+    bot.auxiliary_msgs['user_msgs'][callback.message.chat.id].append(msg)
 
-# Редактирование - ШАГ 5: перевод получен, запрос подтверждения изменений
-@vocabulary_router.message(WordPhraseFSM.translate, IsKeyInStateFilter('word_to_update'))
-async def update_word_get_translate_ask_confirm(message: types.Message, state: FSMContext, bot: Bot) -> None:
-    """
-    Редактирование слова/фразы WordPhrase - шаг 5, получение перевода и запрос подтверждения изменений.
-
-    :param message: Сообщение пользователя с отредактированным переводом
-    :param state: Контекст состояния
-    :param bot: Объект бота
-    :return: None
-    """
-
-    # Переотправка сообщения с новыми данными с пометкой шага
-    await re_send_msg_with_step(message=message, bot=bot, state=state, msg_text='<b>Новый перевод:</b>')
-
-    # Записываем слово в контекст состояния
-    translate = message.text if len(message.text) > 1 else PLUG_TEMPLATE
-    await state.update_data(translate=translate)
-
-    # Получаем данные из контекста
-    word_to_update, cancel_page = await get_upd_word_and_cancel_page_from_context(state)
-
-    # Редактируем баннер и клавиатуру
-    btns = {'Подтвердить изменения ✅': 'pass'}
-    kbds = add_new_or_edit_word_main_btns(btns=btns, level=2, sizes=(2, 1, 2), cancel_page_address=cancel_page)
-    caption = await get_word_phrase_caption_formatting(word_phrase_obj=word_to_update)
-    await bot.auxiliary_msgs['cbq_msg'][message.chat.id].edit_caption(
-        caption=banners_details.update_word_step_5.format(**caption), reply_markup=kbds
-    )
-
-    # Переходим в состояние ввода контекста
+    # Устанавливаем состояние ввода примера к заметке
     await state.set_state(WordPhraseFSM.context)
 
 
-# Редактирование - ШАГ 5 VAR: этап редактирования перевода пропущен, запрос подтверждения изменений
-@vocabulary_router.callback_query(
-    WordPhraseFSM.translate, IsKeyInStateFilter('word_to_update'), F.data.contains('pass'))
-async def update_word_pass_translate_ask_confirm(callback: types.CallbackQuery, state: FSMContext, bot: Bot) -> None:
+# Добавление нового введённого примера из add_new_context_ask_text, запрос завершения / дальнейших действий с примерами
+@vocabulary_router.message(WordPhraseFSM.context, IsKeyNotInStateFilter('editing_context_obj'))
+async def edit_word_add_new_context_get_text(message: types.Message, state: FSMContext, session: AsyncSession,
+                                             bot: Bot) -> None:
     """
-    Редактирование слова/фразы WordPhrase - шаг 5 VAR: пропуск перевода и запрос подтверждения изменений.
+    Добавление нового введённого примера Context из add_new_context, запрос завершения/дальнейших действий с примерами.
 
-    :param callback: Callback запрос формата "pass"
-    :param state: Контекст состояния
-    :param bot: Объект бота
-    :return: None
-    """
-
-    # Сохраняем callback
-    bot.auxiliary_msgs['cbq'][callback.message.chat.id] = callback
-
-    # Получаем данные из контекста
-    word_to_update, cancel_page = await get_upd_word_and_cancel_page_from_context(state)
-
-    # Записываем в контекст состояния атрибут transcription
-    await state.update_data(translate=word_to_update.translate)
-
-    # Редактируем баннер и клавиатуру
-    btns = {'Подтвердить изменения ✅': 'pass'}
-    kbds = add_new_or_edit_word_main_btns(btns=btns, level=2, sizes=(2, 1, 2), cancel_page_address=cancel_page)
-    caption = await get_word_phrase_caption_formatting(word_phrase_obj=word_to_update)
-    await bot.auxiliary_msgs['cbq_msg'][callback.message.chat.id].edit_caption(
-        caption=banners_details.update_word_step_5.format(**caption), reply_markup=kbds
-    )
-
-    # Переходим в состояние ввода контекста
-    await state.set_state(WordPhraseFSM.context)
-
-
-# Редактирование - ШАГ 6: подтверждение изменений WordPhrase, запрос завершения / дальнейших действий с примерами
-# Здесь же обработка отмены добавления нового примера Context
-@vocabulary_router.callback_query(WordPhraseFSM.context, IsKeyInStateFilter('word_to_update'),
-                                  F.data.contains('pass') | F.data.contains('edit_word_cancel_add_example'))
-async def update_word_wait_context(callback: types.CallbackQuery, state: FSMContext, session: AsyncSession, bot: Bot) \
-        -> None:
-    """
-    Редактирование слова/фразы WordPhrase. Запрос завершения или дальнейших действий с примерами Context.
-    Здесь же обработка отмены добавления нового примера Context.
-
-    :param callback: Callback-запрос формата "pass" или "edit_word_cancel_add_example"
-    :param state: Контекст состояния
+    :param message: Сообщение пользователя с новым примером Context
+    :param state: Контекст состояния с объектом WordPhrase в ключе 'word_to_update' и БЕЗ ключа 'editing_context_obj'
+                  для ветвления с редактированием примера WordPhrase
     :param session: Пользовательская сессия
     :param bot: Объект бота
     :return: None
     """
 
-    # Забираем все введённые данные
-    data: dict = await state.get_data()
-    editing_word = data.get('word_to_update')
-    word_id = data.get('word_to_update').id
-    cancel_page_address = data.get('page_address')
+    # Делаем валидацию ввода, при некорректном значении уведомляем и выходим из функции
+    if not validate_context_example(message.text):
+        msg_text = context_validation_not_passed_msg_template
+        await try_alert_msg(bot, message.chat.id, msg_text, if_error_send_msg=True)
+        await bot.delete_message(message.chat.id, message.message_id)
+        return
 
-    # Если нажата кнопка "Подтвердить изменения", редактируем в БД запись WordPhrase и отправляем сообщение пользователю
-    if callback.data == 'pass':
+    # Сохраняем сообщение во вспомогательные
+    bot.auxiliary_msgs['user_msgs'][message.chat.id].append(message)
 
-        # Проверяем, внесены ли изменения пользователем в запись
-        have_changes = False
-        for key, value in inspect(editing_word).attrs.items():
-            if key in ('topic_id', 'word', 'transcription', 'translate'):
-                if value.value != data.get(key):
-                    have_changes = True
-        if not have_changes:
-            await callback.answer('⚠️ Упс! В записи не было изменений', show_alert=True)
+    # Забираем WordPhrase из контекста
+    state_data = await state.get_data()
+    word_to_update = state_data.get('word_to_update')
 
-        # Если внесены изменения, редактируем в БД запись WordPhrase
-        else:
-            is_updated = False
-            updating_dict = {
-                'topic_id': data['topic_id'],
-                'word': data['word'],
-                'transcription': data['transcription'],
-                'translate': data['translate']
-            }
-            try:
-                is_updated = await DataBase.update_word_phrase(session, word_id, updating_dict)
-                await callback.answer('✅ Запись обновлена!', show_alert=True)
-            except (Exception, ) as e:
-                await callback.answer(oops_with_error_msg_template.format(error=e), show_alert=True)
+    # Создаём новый пример Context в БД и отправляем уведомление с результатом
+    try:
+        data = {'context': message.text}
+        created_example = await DataBase.create_context_example(session, data, word_id=word_to_update.id)
+        if created_example:
+            await try_alert_msg(bot, message.chat.id, '✅ Пример успешно добавлен!', if_error_send_msg=True)
+    except (Exception,) as e:
+        msg_text = oops_with_error_msg_template.format(error=str(e))
+        await try_alert_msg(bot, message.chat.id, msg_text, if_error_send_msg=True)
+        return
 
-            # Обновляем данные в ключе word_to_update в контексте (для дальнейшей работы с примерами)
-            if is_updated:
-                word_to_update = await DataBase.get_word_phrase_by_id(session, word_id)
-                await state.update_data(word_to_update=word_to_update)
+    # Очищаем вспомогательные сообщения
+    await clear_auxiliary_msgs_in_chat(bot, message.chat.id)
 
-    # Забираем слово с обновленными данными
-    word_with_new_date = await DataBase.get_word_phrase_by_id(session, word_id)
-
-    # Обновляем баннер и клавиатуру
-    btns = {
-        'Вернуться к записям 📖': cancel_page_address,
-        'Добавить ещё пример ➕': f'add_more_examples_to_word_{word_id}',
-        'Управление примерами 📝': 'edit_context',
-        'Редактировать заново ✏️': f'update_word_{word_id}',
-    }
-    kbds = add_new_or_edit_word_main_btns(level=2, btns=btns, cancel_possible=False, sizes=(2, 1, 1))
-    bot.reply_markup_save[callback.message.chat.id] = kbds
-    caption = await get_word_phrase_caption_formatting(word_phrase_obj=word_with_new_date)
-    await bot.auxiliary_msgs['cbq_msg'][callback.message.chat.id].edit_caption(
-        caption=banners_details.update_word_step_6.format(**caption), reply_markup=kbds
+    # Возвращаемся к основному окну редактирования записи
+    modified_callback = await modify_callback_data(
+        bot.auxiliary_msgs['cbq'][message.chat.id], f'update_word_{word_to_update.id}'
     )
+    await edit_word_phrase_main(modified_callback, state, bot, session)
 
-    # Очищаем вспомогательные сообщения.
+
+# УДАЛЕНИЕ ПРИМЕРОВ
+
+# Отмена редактирования/удаления примера Context
+@vocabulary_router.callback_query(F.data == 'cancel_update_context', IsKeyInStateFilter('word_to_update'))
+async def cancel_update_context(callback: types.CallbackQuery, state: FSMContext, bot: Bot) -> None:
+    """
+    Отмена редактирования/удаления примера Context.
+    Удаляет информационное сообщение, сбрасывает значение атрибутов WordPhraseFSM.
+
+    :param callback: Callback-запрос формата "cancel_update_context"
+    :param state: Контекст состояния FSM
+    :param bot: Объект бота
+    :return: None
+    """
+    await callback.answer('⚠️ Действие отменено!', show_alert=True)
+
+    # Удаляем ключ editing_context_obj с объектом Context из FSM
+    await state.update_data(editing_context_obj=None)
+
+    # Возвращаемся к основному окну редактирования примеров
+    await edit_word_show_examples(callback, state, bot)
+
+
+# Редактирование WordPhrase, удаление примера Context - ШАГ 1, запрос подтверждения
+@vocabulary_router.callback_query(F.data.startswith('delete_context_'), IsKeyInStateFilter('word_to_update'))
+async def edit_word_delete_example_ask_confirm(callback: types.CallbackQuery, session: AsyncSession, bot: Bot, ) \
+        -> None:
+    """
+    Редактирование WordPhrase, удаление примера Context - ШАГ 1, запрос подтверждения.
+
+    :param callback: Callback-запрос формата "delete_context_{Context.id}"
+    :param session: Пользовательская сессия
+    :param bot: Объект бота
+    :return: None
+    """
+    bot.auxiliary_msgs['cbq'][callback.message.chat.id] = callback
+
+    # Очищаем вспомогательные сообщения
     await clear_auxiliary_msgs_in_chat(bot, callback.message.chat.id)
 
-    # INFO: на выходе остаётся состояние WordPhraseFSM.context, IsKeyInStateFilter('word_to_update') на случай, если
-    #       нужно будет дальше работать с примерами Context
+    # Получаем id примера из callback и его объект из БД
+    context_id = int(callback.data.replace('delete_context_', ''))
+    context_obj = await DataBase.get_context_by_id(session, context_id)
+
+    # Отправляем пользователю информационное сообщение с запросом подтверждения действия или отмены
+    msg_text = f'⚠️ Вы действительно хотите удалить пример <b>"{context_obj.example}"</b>?'
+    btns = {'Удалить 🗑': f'confirm_delete_context_{context_id}', 'Отмена ❌': 'cancel_update_context'}
+    kbds = get_inline_btns(btns=btns)
+    info_msg = await callback.message.answer(msg_text, reply_markup=kbds)
+    bot.auxiliary_msgs['user_msgs'][callback.message.chat.id].append(info_msg)
+
+
+# Редактирование WordPhrase, удаление примера Context - ШАГ 2, удаление из БД
+@vocabulary_router.callback_query(F.data.startswith('confirm_delete_context_'), IsKeyInStateFilter('word_to_update'))
+async def edit_word_delete_example_get_confirm(callback: types.CallbackQuery, session: AsyncSession, bot: Bot,
+                                               state: FSMContext) -> None:
+    """
+    УРедактирование WordPhrase, удаление примера Context - ШАГ 2, удаление из БД.
+
+    :param callback: Callback-запрос формата "delete_context_{context_id}"
+    :param session: Пользовательская сессия
+    :param bot: Объект бота
+    :param state: Контекст состояния FSM с ключом 'word_to_update'
+    :return: None
+    """
+
+    # Получаем id примера из callback
+    context_id = int(callback.data.replace('confirm_delete_context_', ''))
+
+    # Удаляем пример Context из БД
+    is_del = False
+    try:
+        is_del = await DataBase.delete_context_by_id(session, context_id)
+    except Exception as e:
+        await callback.answer(oops_with_error_msg_template.format(error=str(e)), show_alert=True)
+
+    # При успехе:
+    if is_del:
+        await callback.answer('✅ Пример удалён', show_alert=True)
+
+        try:
+            # Обновляем данные 'word_to_update' в контексте FSM
+            state_data = await state.get_data()
+            word_to_update = state_data.get('word_to_update')
+            word_to_update = await DataBase.get_word_phrase_by_id(session, word_to_update.id)
+            await state.update_data(word_to_update=word_to_update)
+
+            # Обновляем описание баннера в основном окне
+            caption_formatting = await get_word_phrase_caption_formatting(word_phrase_obj=word_to_update)
+            caption = banners_details.update_word_main.format(**caption_formatting)
+            await bot.auxiliary_msgs['cbq_msg'][callback.message.chat.id].edit_caption(
+                reply_markup=bot.reply_markup_save[callback.message.chat.id], caption=caption)
+        except (Exception,):
+            pass
+
+        # Возвращаемся к основному окну редактирования примеров
+        await edit_word_show_examples(callback, state, bot)
+
+
+# РЕДАКТИРОВАНИЕ ПРИМЕРОВ
+
+# Редактирование WordPhrase, редактирование примера Context - ШАГ 1, запрос ввода нового текста примера
+@vocabulary_router.callback_query(F.data.startswith('update_context_'), IsKeyInStateFilter('word_to_update'))
+async def update_context_example_ask_new_text(
+        callback: types.CallbackQuery, state: FSMContext, session: AsyncSession, bot: Bot) -> None:
+    """
+    Редактирование WordPhrase, редактирование примера Context - ШАГ 1, запрос ввода нового текста примера.
+    Функция добавляет в FSMState дополнительный ключ 'editing_context_obj' с редактируемым объектом Context.
+
+    :param callback: Callback-запрос формата "update_context_{Context.id}"
+    :param state: Контекст состояния с объектом WordPhrase в ключе 'word_to_update'
+    :param session: Пользовательская сессия
+    :param bot: Объект бота
+    :return: None
+    """
+    bot.auxiliary_msgs['cbq'][callback.message.chat.id] = callback
+
+    # Получаем id примера из callback и объект примера из БД
+    context_id = int(callback.data.replace('update_context_', ''))
+    context_obj = await DataBase.get_context_by_id(session, context_id)
+
+    # Помещаем объект примера в FSM под ключом 'editing_context_obj'
+    await state.update_data(editing_context_obj=context_obj)
+
+    # Очищаем вспомогательные сообщения
+    await clear_auxiliary_msgs_in_chat(bot, callback.message.chat.id)
+
+    # Отправляем сообщение с запросом ввода нового текста примера и кнопкой отмены. Сохраняем во вспомогательные
+    current_data = getattr(context_obj, 'example')  # Текущий текст примера
+    btns = {
+        'Отмена ❌': 'cancel_update_context',
+        'Текст сейчас 📝': f'switch_inline_query_current_chat_{current_data}'
+    }
+    msg_text = (f'<b>Редактирование примера</b>:\n "{context_obj.example}"\n\n'
+                f'Введите новый текст примера или нажмите <i>"Текст сейчас 📝"</i> для подгрузки в строку ввода '
+                f'текущих данных для удобной корректировки.')
+    info_msg = await callback.message.answer(text=msg_text, reply_markup=get_inline_btns(btns=btns, sizes=(2,)))
+    bot.auxiliary_msgs['user_msgs'][callback.message.chat.id].append(info_msg)
+
+    # Устанавливаем состояние ввода текста примера
+    await state.set_state(WordPhraseFSM.context)
+
+
+# Редактирование WordPhrase, редактирование примера Context - ШАГ 2, сохранение нового текста примера в БД
+@vocabulary_router.message(WordPhraseFSM.context, IsKeyInStateFilter('editing_context_obj', 'word_to_update'))
+async def update_context_example_get_new_text(
+        message: types.Message, state: FSMContext, session: AsyncSession, bot: Bot) -> None:
+    """
+    Редактирование WordPhrase, редактирование примера Context - ШАГ 2, сохранение нового текста примера в БД.
+
+    :param message: Текст сообщения с новым текстом примера
+    :param state: Контекст состояния с объектом Context в ключе 'editing_context_obj' и объектом WordPhrase в
+                  ключе 'word_to_update'
+    :param session: Пользовательская сессия
+    :param bot: Объект бота
+    :return: None
+    """
+
+    # Делаем валидацию ввода, при некорректном значении уведомляем и выходим из функции
+    if not validate_context_example(message.text):
+        msg_text = context_validation_not_passed_msg_template
+        await try_alert_msg(bot, message.chat.id, msg_text, if_error_send_msg=True)
+        await bot.delete_message(message.chat.id, message.message_id)
+        return
+
+    # Сохраняем сообщение во вспомогательные
+    bot.auxiliary_msgs['user_msgs'][message.chat.id].append(message)
+
+    # Получаем данные из контекста
+    state_data = await state.get_data()
+    context_obj = state_data['editing_context_obj']
+    word_to_update = state_data.get('word_to_update')
+
+    # Обновляем текст примера (Context.example)
+    is_updated = False
+    try:
+        is_updated = await DataBase.update_context_by_id(session, context_obj.id, example=message.text)
+    except Exception as e:
+        msg_text = oops_with_error_msg_template.format(error=str(e))
+        await try_alert_msg(bot, message.chat.id, msg_text, if_error_send_msg=True)
+
+    # Если текст примера (Context.example) был успешно обновлен:
+    if is_updated:
+        await try_alert_msg(bot, message.chat.id, '✅ Данные успешно изменены!', if_error_send_msg=True)
+        try:
+            # Обновляем объект WordPhrase в контексте
+            word_to_update = await DataBase.get_word_phrase_by_id(session, word_to_update.id)
+            await state.update_data(word_to_update=word_to_update)
+
+            # Редактируем caption в основном сообщении
+            caption_formatting = await get_word_phrase_caption_formatting(word_phrase_obj=word_to_update)
+            caption = banners_details.update_word_main.format(**caption_formatting)
+            await bot.auxiliary_msgs['cbq_msg'][message.chat.id].edit_caption(
+                reply_markup=bot.reply_markup_save[message.chat.id], caption=caption
+            )
+        except (Exception,):
+            pass
+
+        # Возвращаемся к основному окну редактирования примеров
+        await edit_word_show_examples(bot.auxiliary_msgs['cbq'][message.chat.id], state, bot)
+
+    # Удаляем ключ editing_context_obj с объектом Context из FSM
+    await state.update_data(editing_context_obj=None)

@@ -17,7 +17,6 @@ from app.handlers.user_private.speaking_actions import speaking_router
 from app.handlers.user_private import add_word_phrase_actions, auth_actions
 from app.handlers.user_private.vocabulary.topic_actions import topic_router
 from app.handlers.user_private.vocabulary.note_actions import note_router
-from app.handlers.user_private.vocabulary.context_examples_actions import context_examples_router
 from app.handlers.user_private.tests_actions import tests_router
 from app.handlers.user_private.vocabulary import vocabulary_actions
 from app.handlers.user_group import user_group_router
@@ -46,7 +45,6 @@ dp = Dispatcher()
 dp.include_router(auth_actions.auth_router)
 dp.include_router(user_private_router)
 dp.include_router(topic_router)
-dp.include_router(context_examples_router)
 dp.include_router(vocabulary_actions.vocabulary_router)
 dp.include_router(note_router)
 dp.include_router(add_word_phrase_actions.word_phrase_router)

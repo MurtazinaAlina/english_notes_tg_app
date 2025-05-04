@@ -60,12 +60,6 @@ class WordPhraseFSM(StatesGroup):
     # Состояние для поиска слова/фразы по ключевому слову
     search_keywords = State()
 
-    # Переменная для записи редактируемого сообщения с Context-примером, для онлайн-отображения изменения примера
-    editing_message = None
-
-    # Переменная для записи информационного сообщения с запросом текста и отменой при редактировании примера Context
-    updating_info_message_with_cancel = None
-
     # Переменные для отображения в описании баннера при возврате на шаг назад:
 
     # При создании новой записи
@@ -75,15 +69,6 @@ class WordPhraseFSM(StatesGroup):
         'WordPhraseFSM:transcription': banners_details.add_new_word_step_3,
         'WordPhraseFSM:translate': banners_details.add_new_word_step_4,
         'WordPhraseFSM:context': banners_details.add_new_word_step_5
-    }
-
-    # При редактировании существующей записи
-    edit_word_caption = {
-        'WordPhraseFSM:topic': banners_details.update_word_step_1,
-        'WordPhraseFSM:word': banners_details.update_word_step_2,
-        'WordPhraseFSM:transcription': banners_details.update_word_step_3,
-        'WordPhraseFSM:translate': banners_details.update_word_step_4,
-        'WordPhraseFSM:context': banners_details.update_word_step_5
     }
 
 
