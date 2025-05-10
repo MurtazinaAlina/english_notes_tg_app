@@ -12,6 +12,7 @@ from dotenv import load_dotenv, find_dotenv
 load_dotenv(find_dotenv())
 
 from app.handlers.user_private.user_private import user_private_router
+from app.handlers.user_private.profile_actions import profile_router
 from app.handlers.user_private.giga_ai import giga_router
 from app.handlers.user_private.speaking_actions import speaking_router
 from app.handlers.user_private import add_word_phrase_actions, auth_actions
@@ -43,6 +44,7 @@ giga_chat = create_gigachat_assistant()
 # Создаём диспетчер обработки + подключаем к нему роутеры
 dp = Dispatcher()
 dp.include_router(auth_actions.auth_router)
+dp.include_router(profile_router)
 dp.include_router(user_private_router)
 dp.include_router(topic_router)
 dp.include_router(vocabulary_actions.vocabulary_router)

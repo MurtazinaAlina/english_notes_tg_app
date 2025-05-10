@@ -7,6 +7,10 @@ from dotenv import load_dotenv, find_dotenv
 load_dotenv(find_dotenv())
 
 
+UTC_ADJUSTMENT = 3                                                  # Корректировка UTC
+RESET_PASS_TOKEN_EXPIRE_MINUTES = 10                                # Время жизни ключа сброса пароля в минутах
+CHAT_AUTOLOGIN_EXPIRE_DAYS = 90                                     # Срок автоматической аутентификации по чату в днях
+
 # Настройки GIGACHAT
 GIGA_AUTH = os.getenv('SBER_AUTH')
 GIGA_SCOPE = os.getenv('SBER_SCOPE')
@@ -42,6 +46,9 @@ PER_PAGE_VOCABULARY = 4
 PER_PAGE_TOPICS = 5
 PER_PAGE_VOICE_SAMPLES = 5
 PER_PAGE_INLINE_TOPICS = 4
+PER_PAGE_AUDIO_DATES = 2
+PER_PAGE_AUDIOS = 2
+
 
 # Зачитываемый текст для образца голоса при выборе
 VOICE_SAMPLES_TEXT = ('I will be your reliable assistant and help you improve your English listening skills '
@@ -108,3 +115,17 @@ EXCEL_COLUMNS_NOTES_SHEET = {
         'D': {'header': 'Примеры', 'width': 80},
     }
 EXCEL_CONTEXT_COLOR = '064681'                                # Цвет контекста в xsl-файле
+
+# Хранение аудио файлов
+
+# Путь к временному хранилищу несохраненных аудио пользователя
+AUDIO_TEMP_PATH = os.path.join(os.getcwd(), 'app', 'data', 'audio', 'user_{user_id}', 'tmp')
+
+# Путь к общей папке пользователя с сохранёнными аудио
+SAVED_AUDIO_ROOT_DIR = os.path.join(os.getcwd(), 'app', 'data', 'audio', 'user_{user_id}')
+
+# Путь к конкретной папке при сохранении аудио (с датой)
+AUDIO_FINAL_PATH = os.path.join(SAVED_AUDIO_ROOT_DIR, '{date}')
+
+FILENAME_AUDIOS_ZIP = 'my_audios.zip'                       # Название zip-архива с сохранёнными аудио
+FILENAME_AUDIOS_CAPTION = 'Ваш архив с аудио'               # Заголовок zip-архива с сохранёнными аудио

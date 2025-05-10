@@ -8,14 +8,15 @@ from typing import Sequence, Type
 from datetime import datetime, timedelta
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine, AsyncEngine
-from sqlalchemy import select, update, func, desc, exists, event, or_
+from sqlalchemy import select, update, func, desc, exists, event, or_, Row
 from sqlalchemy.orm import joinedload, selectinload
 from argon2 import PasswordHasher
 
 from app.database.models import Base, WordPhrase, Topic, Context, Banner, User, PasswordReset, Attempt, Report, \
-    UserChat, UserSettings, Notes
+    UserChat, UserSettings, Notes, SavedAudio
 from app.banners.banners_details import banner_details
-from app.settings import PLUG_TEMPLATE, PATTERN_CONTEXT_EXAMPLE
+from app.settings import PLUG_TEMPLATE, PATTERN_CONTEXT_EXAMPLE, UTC_ADJUSTMENT, RESET_PASS_TOKEN_EXPIRE_MINUTES, \
+    CHAT_AUTOLOGIN_EXPIRE_DAYS
 
 
 # Функция для регистрации функции REGEXP в БД. Возвращает True, если строка row содержит pattern
@@ -93,7 +94,6 @@ class DataBase:
             try:
                 banner = Banner(
                     name=banner['name'],
-                    # image_path=os.path.abspath(banner['image_path']),           # Абсолютный путь из относительного
                     image_path=banner['image_path'],
                     description=banner['description']
                 )
@@ -244,8 +244,9 @@ class DataBase:
 
         async with self.session_maker() as session:
 
-            # Определяем крайний срок создания токена. Удаляем токены старше 10 минут и 3 часов (поправка на UTC)
-            expiration_time = datetime.now() - timedelta(minutes=10) - timedelta(hours=3)
+            # Определяем крайний срок создания токена. Удаляем токены старше установленного в settings.py времени
+            expiration_time = datetime.now() - timedelta(
+                minutes=RESET_PASS_TOKEN_EXPIRE_MINUTES) - timedelta(hours=UTC_ADJUSTMENT)
 
             # Находим все токены старше установленного времени
             result = await session.execute(
@@ -633,6 +634,41 @@ class DataBase:
         await session.commit()
         return True
 
+    @staticmethod
+    async def get_random_context(session: AsyncSession, user_id: int) -> Type[Context] | None:
+        """
+        Получить случайный пример Context пользователя.
+
+        :param session: Пользовательская сессия
+        :param user_id: id пользователя
+        :return: Объект Context
+        """
+        query = (select(Context)
+                 .join(WordPhrase, Context.word_id == WordPhrase.id)
+                 .join(Topic, Topic.id == WordPhrase.topic_id)
+                 .where(Topic.user_id == user_id).order_by(func.random())
+                 .limit(1)
+                 )
+        result = await session.execute(query)
+        return result.scalars().first()
+
+    @staticmethod
+    async def check_if_user_has_examples(session: AsyncSession, user_id: int) -> bool:
+        """
+        Проверка, есть ли примеры Context у пользователя.
+
+        :param session: Пользовательская сессия
+        :param user_id: ID пользователя User
+        :return: True, если у пользователя есть примеры, False в противном случае
+        """
+        query = select(exists().where(
+            Context.word_id == WordPhrase.id,
+            WordPhrase.topic_id == Topic.id,
+            Topic.user_id == user_id)
+        )
+        result = await session.execute(query)
+        return result.scalar()
+
     # ATTEMPTS
 
     @staticmethod
@@ -852,14 +888,15 @@ class DataBase:
     async def delete_old_user_chats(self) -> None:
         """
         Удаление устаревших записей с привязкой ID чата Telegram к пользователю в таблице UserChat.
-        Срок жизни записи - 90 дней с момента создания привязки.
+        Срок жизни записи с момента создания привязки уставливается в settings.py.
 
         :return: None
         """
         async with self.session_maker() as session:
 
-            # Удаляем записи старше 90 дней и 3 часов (поправка на UTC)
-            expiration_time = datetime.now() - timedelta(days=90) - timedelta(hours=3)
+            # Удаляем записи старше установленного в settings.py времени
+            expiration_time = datetime.now() - timedelta(
+                days=CHAT_AUTOLOGIN_EXPIRE_DAYS) - timedelta(hours=UTC_ADJUSTMENT)
 
             # Находим все неактуальные записи, которые нужно удалить
             query = select(UserChat).filter(UserChat.created < expiration_time)
@@ -1048,3 +1085,81 @@ class DataBase:
         await session.execute(query)
         await session.commit()
         return True
+
+    # AUDIOS
+
+    @staticmethod
+    async def save_file_path_to_audio(session: AsyncSession, file_path: str, user_id: int) -> SavedAudio:
+        """
+        Сохранение пути к аудиофайлу в таблице SavedAudio.
+        Сам аудиофайл сохраняется в другом модуле, здесь фиксируется в БД путь к нему.
+
+        :param session: Пользовательская сессия
+        :param file_path: Путь к сохранённому аудиофайлу
+        :param user_id: ID пользователя User
+        :return: Объект SavedAudio
+        """
+        new_audio = SavedAudio(file_path=file_path, user_id=user_id)
+        session.add(new_audio)
+        await session.commit()
+        return new_audio
+
+    @staticmethod
+    async def get_all_saved_audios(session: AsyncSession, user_id: int, filter_date: str = None) -> Sequence[SavedAudio]:
+        """
+        Получить все сохранённые аудиофайлы пользователя.
+
+        :param session: Пользовательская сессия
+        :param user_id: ID пользователя User
+        :param filter_date: Дата в формате 'YYYY-MM-DD'
+        :return: Список объектов SavedAudio
+        """
+        query = select(SavedAudio).where(SavedAudio.user_id == user_id)
+
+        # Если передан фильтр по дате, применяем
+        if filter_date:
+            filter_date = datetime.strptime(filter_date, "%Y-%m-%d").date()
+            query = query.where(func.date(SavedAudio.created) == filter_date)
+
+        result = await session.execute(query)
+        return result.scalars().all()
+
+    @staticmethod
+    async def get_audio_dates_and_count(session: AsyncSession, user_id: int) -> Sequence[Row[tuple[datetime, int]]]:
+        """
+        Получить список всех дат сохранённых аудиофайлов пользователя + количество аудио за каждую дату.
+
+        :param session: Пользовательская сессия
+        :param user_id: ID пользователя User
+        :return: Список кортежей (дата в формате 'YYYY-MM-DD', количество аудио за дату)
+        """
+        query = (select(
+            func.date(SavedAudio.created),
+            func.count(SavedAudio.id).label('count')
+        )
+                 .where(SavedAudio.user_id == user_id)
+                 .group_by(func.date(SavedAudio.created))
+                 .order_by(func.date(SavedAudio.created).desc())
+                 )
+        result = await session.execute(query)
+        return result.all()
+
+    @staticmethod
+    async def delete_audio_by_id(session: AsyncSession, audio_id: int) -> str | None:
+        """
+        Удаление аудиофайла из таблицы SavedAudio по его ID.
+
+        :param session: Пользовательская сессия
+        :param audio_id: ID аудиофайла SavedAudio
+        :return: Путь к аудиофайлу если удаление из БД прошло успешно (для передачи на удаление из файловой системы)
+        """
+        query = await session.get(SavedAudio, audio_id)
+
+        # Получаем путь к аудиофайлу
+        file_name = None
+        if query is not None:
+            file_name = str(query.file_path)
+
+        await session.delete(query)
+        await session.commit()
+        return file_name

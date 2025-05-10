@@ -167,7 +167,7 @@ def get_inline_btns(
 def get_kbds_start_page_btns(
         *,
         username: str | None = None,
-        sizes: tuple[int, ...] = (1, 1, 2, 2, 1)
+        sizes: tuple[int, ...] = (2, 1, 1, 2, 1)
 ) -> InlineKeyboardMarkup:
     """
     Клавиатура стартовой страницы start_page. Начальное меню + кнопки авторизации.
@@ -179,10 +179,10 @@ def get_kbds_start_page_btns(
 
     # Создаем клавиатуру и добавляем в нее кнопки стартового меню
     btns = {
-        "Добавить запись в словарь ➕": 'add_new_word',
-        "Словарь & Заметки 📚": MenuCallBack(level=1, menu_name='vocabulary').pack(),
-        "Произнести 🎙": MenuCallBack(level=1, menu_name='speaking').pack(),
+        "Новая запись ➕": 'add_new_word',
         "Тесты 🎓": MenuCallBack(level=1, menu_name='tests').pack(),
+        "Словарь & Заметки 📚": MenuCallBack(level=1, menu_name='vocabulary').pack(),
+        "Произношение 🎙": MenuCallBack(level=1, menu_name='speaking').pack(),
         "AI ассистент 💡": MenuCallBack(level=1, menu_name='giga').pack(),
         "Reverso 🌐": REVERSO_URL,
     }
@@ -235,7 +235,7 @@ def get_auth_btns(
 
     # Добавляем кнопки профиля (при флаге profile=True)
     if profile:
-        keyboard.add(InlineKeyboardButton(text='Статистика и данные 📊', callback_data='statistic_page_1'))
+        keyboard.add(InlineKeyboardButton(text='Статистика и данные 👩🏻‍💻', callback_data='user_stat_and_data'))
         keyboard.add(InlineKeyboardButton(text='Настройки аудио ⚙', callback_data='user_settings'))
         keyboard.add(InlineKeyboardButton(text='Выйти из профиля ➡️', callback_data='log_out_ask_confirm'))
     else:

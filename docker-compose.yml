@@ -1,7 +1,7 @@
 version: "3"
 
 volumes:
-  db-data:                                                        # Том для сохранения БД
+  db-data:                                                            # Том для сохранения БД
 
 services:
   app:
@@ -11,7 +11,7 @@ services:
     restart: unless-stopped
     environment:
       BOT_TOKEN: ${BOT_TOKEN}
-      DB_LITE: "sqlite+aiosqlite:///data/tg_app_base.db"	        # Путь к БД для docker
+      DB_LITE: "sqlite+aiosqlite:///app/data/tg_app_base.db"	        # Путь к БД для docker от рабочей директории
       SMTP_SERVER: ${SMTP_SERVER}
       SMTP_PORT: ${SMTP_PORT}
       SENDER_EMAIL: ${SENDER_EMAIL}
@@ -19,7 +19,7 @@ services:
       SBER_AUTH: ${SBER_AUTH}
       SBER_SCOPE: ${SBER_SCOPE}
     volumes:
-      - db-data:/code/data                                          # Том только под БД
+      - db-data:/code/app/data                                          # Том только под БД
     working_dir: /code
     entrypoint: ["/bin/bash", "/code/entrypoint.sh"]
     command: ["python", "-m", "app.main"]

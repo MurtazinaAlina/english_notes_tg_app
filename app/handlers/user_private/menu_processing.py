@@ -11,7 +11,7 @@ from app.banners import banners_details as bnr
 from app.common.tools import clear_all_data, check_if_authorized, get_topic_kbds_helper, \
     get_word_phrase_caption_formatting, clear_auxiliary_msgs_in_chat, check_if_user_has_topics, check_if_words_exist
 from app.common.msg_templates import stat_msg_template
-from app.common.fsm_classes import SpeakingFSM, GigaAiFSM
+from app.common.fsm_classes import GigaAiFSM
 from app.keyboards.inlines import (get_kbds_start_page_btns, get_auth_btns, get_kbds_with_navi_header_btns,
                                    MenuCallBack, get_inline_btns, get_kbds_tests_btns)
 from app.utils.custom_bot_class import Bot
@@ -464,32 +464,45 @@ async def tests(
 
 
 # Сформировать баннер с описанием и клавиатуру для раздела "Озвучить текст".
-# Обработка callback-запросов формата "menu:1:speaking::1"
-async def speaking(session: AsyncSession, state: FSMContext | None, level: int, menu_name: str, **kwargs) \
-        -> tuple[InputMediaPhoto, InlineKeyboardMarkup] | None:
+# Обработка callback-запросов формата "menu:1:speaking::1", "menu:1:speaking:step_back:1"
+async def speaking(
+        session: AsyncSession,
+        level: int,
+        menu_name: str,
+        bot: Bot,
+        callback: CallbackQuery,
+        state: FSMContext,
+        **kwargs
+) -> tuple[InputMediaPhoto, InlineKeyboardMarkup] | None:
     """
-    Сформировать баннер с описанием и клавиатуру для раздела "Озвучить текст".
-    Обработка callback-запросов формата "menu:1:speaking::1"
+    Сформировать баннер с описанием и клавиатуру для раздела "Произношение".
+    Обработка callback-запросов формата "menu:1:speaking::1", "menu:1:speaking:step_back:1"
 
     :param session: Пользовательская сессия
-    :param state: Контекст состояния FSM
     :param level: Уровень меню
     :param menu_name: Название меню  (для формирования баннера)
+    :param bot: Объект бота
+    :param callback: Callback-запрос
+    :param state: Контекст состояния FSM
     :return: Баннер с описанием и клавиатуру для дальнейшего редактирования в вызывающем обработчике или None при ошибке
     """
+
+    # Сохраняем callback-запрос и баннер
+    bot.auxiliary_msgs['cbq'][callback.message.chat.id] = callback
+    bot.auxiliary_msgs['cbq_msg'][callback.message.chat.id] = callback.message
+
+    # Очищаем чат и контекст FSM
+    await clear_all_data(bot, callback.message.chat.id, state)
 
     # Получаем баннер страницы
     banner: Banner = await DataBase.get_banner_by_name(session, menu_name)
 
     # Формируем описание баннера и клавиатуру
-    caption = bnr.speaking_header
-    kbds = get_kbds_with_navi_header_btns(btns={'Очистить чат 🗑': 'clear_chat'}, level=level, menu_name=menu_name)
-
-    # Устанавливаем состояние для ввода текста
-    await state.set_state(SpeakingFSM.text_input)
+    btns = {'Преобразовать текст в аудио 🔊': 'convert_text_to_audio', 'Практика произношения 🎙': 'speaking_practice'}
+    kbds = get_kbds_with_navi_header_btns(btns=btns, level=level, menu_name=menu_name)
 
     # Формируем объект изображения с описанием
-    image = InputMediaPhoto(media=FSInputFile(banner.image_path), caption=caption)
+    image = InputMediaPhoto(media=FSInputFile(banner.image_path), caption=banner.description)
     return image, kbds
 
 

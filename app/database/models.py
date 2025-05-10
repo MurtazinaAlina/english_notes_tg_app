@@ -45,6 +45,7 @@ class User(Base):
     user_chat = relationship("UserChat", back_populates="user", cascade="all, delete-orphan")
     user_settings = relationship("UserSettings", back_populates="user", cascade="all, delete-orphan")
     notes = relationship("Notes", back_populates="user", cascade="all, delete-orphan")
+    saved_audio = relationship("SavedAudio", back_populates="user", cascade="all, delete-orphan")
 
     # Установка пароля (захешированного)
     def set_password(self, password: str) -> None:
@@ -266,3 +267,15 @@ class Notes(Base):
         CheckConstraint(f"LENGTH(text) >= {MIN_NOTE_TEXT_LENGTH}", name="check_min_text_length"),
         CheckConstraint(f"LENGTH(title) >= {MIN_NOTE_TITLE_LENGTH}", name="check_min_title_length"),
     )
+
+
+# Сохраненные аудио. Пути к файлам
+class SavedAudio(Base):
+    """ Сохраненные аудио. Пути к файлам. """
+    __tablename__ = 'saved_audio'
+
+    user_id: Mapped[int] = mapped_column(ForeignKey(User.id, ondelete='CASCADE'), nullable=False)
+    file_path: Mapped[str] = mapped_column(String(255), nullable=False)
+
+    # Отношения
+    user = relationship(User, back_populates='saved_audio', passive_deletes=True)
