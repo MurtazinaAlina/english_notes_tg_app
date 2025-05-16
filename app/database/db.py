@@ -1017,7 +1017,7 @@ class DataBase:
         """
         query = (select(Notes).where(
             Notes.title == title,
-            Notes.text == text,
+            func.instr(text, Notes.text) > 0,           # Если был дополнен текст заметки, не дублируем, а обновляем
             Notes.user_id == user_id)
         )
         result = await session.execute(query)

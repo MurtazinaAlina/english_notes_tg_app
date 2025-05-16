@@ -101,7 +101,7 @@ async def check_if_words_exist(bot: Bot, chat_id: int, session: AsyncSession) ->
     :return: True, если у пользователя есть записи, иначе False
     """
     if not await DataBase.check_if_user_has_words(session, bot.auth_user_id.get(chat_id)):
-        await bot.auxiliary_msgs['cbq'][chat_id].answer('У вас нет записей!', show_alert=True)
+        await bot.auxiliary_msgs['cbq'][chat_id].answer('⚠️ У вас нет записей!', show_alert=True)
         return False
     return True
 
@@ -510,15 +510,21 @@ async def update_note_msg_data(bot: Bot, chat_id: int, state_data: dict, edited_
     :param state_data: Контекст состояния FSM с ключами:
                         'user_notes' - список всех заметок пользователя,
                         'show_user_notes_cbq' - callback-запрос с номером страницы с заметкой (для "заметка №"),
-                        'note_msg' - с редактируемым сообщением с заметкой
+                        'note_msg' - с редактируемым сообщением с заметкой,
+                        'note_title_view_mode' (опционально) - режим просмотра по заголовкам
     :param edited_note: Объект заметки
     :return: None
     """
 
     # Забираем из контекста информацию для описания заметки и объект сообщения для редактирования
     user_notes = state_data.get('user_notes')
-    page = state_data.get('show_user_notes_cbq').replace('my_notes_page_', '')
     note_msg = state_data.get('note_msg')
+
+    # В зависимости от режима просмотра, определяем порядковый номер заметки
+    if state_data.get('note_title_view_mode'):                                              # Режим просмотра названий
+        page = state_data.get('show_user_notes_cbq').split(':')[0].split('_')[-1]           # show_note_2:18
+    else:
+        page = state_data.get('show_user_notes_cbq').replace('my_notes_page_', '')          # my_notes_page_2
 
     # Формируем новый текст сообщения с заметкой
     examples = join_examples_in_unordered_list(edited_note)

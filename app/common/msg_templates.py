@@ -29,7 +29,7 @@ context_example_msg_template = (
 # Шаблон сообщения с заметкой
 note_msg_template = (
     'Заметка <b>#{page}</b> из <b>{len_user_notes}</b>\n\n'
-    '📒 <b>{note_title}</b>\n'
+    '📒 <b>{note_title}</b>\n\n'
     '{note_text}\n\n'
     '<b>Примеры:</b>\n'
     '<i>{examples}</i>'

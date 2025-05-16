@@ -49,7 +49,7 @@ from app.common.tools import get_upd_word_and_cancel_page_from_context, get_topi
 from app.common.msg_templates import word_msg_template, oops_with_error_msg_template, oops_try_again_msg_template, \
     word_validation_not_passed_msg_template, context_validation_not_passed_msg_template, context_example_msg_template
 from app.common.fsm_classes import WordPhraseFSM, TopicFSM, ImportXlsFSM
-from app.settings import PER_PAGE_VOCABULARY, PATTERN_WORD, PER_PAGE_INLINE_TOPICS
+from app.settings import PER_PAGE_VOCABULARY, PATTERN_WORD, PER_PAGE_INLINE_TOPICS, XLS_DB_CAPTION
 
 
 # Создаём роутер для приватного чата бота с пользователем
@@ -396,7 +396,7 @@ async def send_xls_wb(callback: types.CallbackQuery, session: AsyncSession, bot:
     # Преобразуем файл для отправки и скидываем его в чат
     with open(file_path, "rb") as file:
         data_file = types.BufferedInputFile(file.read(), filename=os.path.basename(file_path))
-    msg = await bot.send_document(chat_id=callback.message.chat.id, document=data_file)
+    msg = await bot.send_document(chat_id=callback.message.chat.id, document=data_file, caption=XLS_DB_CAPTION)
     bot.auxiliary_msgs['user_msgs'][callback.message.chat.id].append(msg)
 
     # Удаляем xlsx-файл из системы после отправки

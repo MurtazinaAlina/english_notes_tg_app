@@ -42,7 +42,8 @@ from app.utils.tts import speak_text
 from app.utils.tts_voices import all_voices_en_US_ShortName_list
 from app.utils.xsl_tools import export_statistic_data_to_xls, export_all_user_data_to_xls
 from app.settings import PER_PAGE_STAT_REPORTS, PATTERN_SPEECH_RATE, PER_PAGE_VOICE_SAMPLES, VOICE_SAMPLES_TEXT, \
-    PER_PAGE_AUDIO_DATES, SAVED_AUDIO_ROOT_DIR, PER_PAGE_AUDIOS, FILENAME_AUDIOS_ZIP, FILENAME_AUDIOS_CAPTION
+    PER_PAGE_AUDIO_DATES, SAVED_AUDIO_ROOT_DIR, PER_PAGE_AUDIOS, FILENAME_AUDIOS_ZIP, FILENAME_AUDIOS_CAPTION, \
+    XLS_DB_CAPTION
 
 # Создаём роутер для приватного чата бота с пользователем
 profile_router = Router()
@@ -445,24 +446,33 @@ async def create_statistic_report(callback: types.CallbackQuery, session: AsyncS
     all_user_reports = state_data.get('all_user_reports')
     last_page = state_data.get('show_statistic_reports_cbq')
 
+    # Если запрос на выгрузку полной базы до просмотра отчётов, то забираем отчёты из БД
+    if not all_user_reports:
+        all_user_reports = await DataBase.get_user_reports(session, user_id=user.id, is_desc=True)
+        await state.update_data(all_user_reports=all_user_reports)
+
     # Создаём отчёт .xls со статистикой
     all_user_reports = list(all_user_reports)
     all_user_reports.reverse()
 
     # Формируем необходимый xlsx-файл в зависимости от запроса в callback
     path_to_file = ''
+    caption = None
     if callback.data == 'create_statistic_report':
         path_to_file = await export_statistic_data_to_xls(session, user.id, all_user_reports)
     elif callback.data == 'export_all_user_data':
         chat_id = callback.message.chat.id
         path_to_file = await export_all_user_data_to_xls(session, bot, chat_id, user.id, all_user_reports)
         last_page = 'user_stat_and_data'
+        caption = XLS_DB_CAPTION
 
     # Отправляем отчёт в чат
     with open(path_to_file, 'rb') as f:
         data_file = types.BufferedInputFile(f.read(), filename=os.path.basename(path_to_file))
     kbds = get_inline_btns(btns={'Вернуться к просмотру данных?': last_page})
-    msg = await bot.send_document(chat_id=callback.message.chat.id, document=data_file, reply_markup=kbds)
+    msg = await bot.send_document(
+        chat_id=callback.message.chat.id, document=data_file, reply_markup=kbds, caption=caption
+    )
     bot.auxiliary_msgs['user_msgs'][callback.message.chat.id].append(msg)
 
     # Удаляем xlsx-файл из системы после отправки

@@ -1,5 +1,18 @@
 """
 Функции для работы с xsl-файлами.
+
+INFO:
+
+ПРО ИМПОРТ
+1. Импорт и экспорт данных в xsl-файл реализованы таким образом, чтобы пользователь имел возможность управлять базой как
+   из приложения, так и с помощью Excel.
+2. Экспортированный файл является шаблоном, предусматривающим добавление новой информации и последующий импорт обратно в
+   приложение бота.
+3. При добавлении в xls-файл дополнительных примеров в записи словаря или заметки, при импорте они будут добавлены к
+   текущим записям WordPhrase и Note в базе.
+4. Таким же образом, если перевод слова/текст заметки был дополнен в xls-файле (сохранен весь старый текст + добавлен
+   новый), при импорте будет обновлена (дозаписана) текущая запись WordPhrase/Note в базе. Дубли не создаются,
+   обновляются соответствующие записи.
 """
 from io import BytesIO
 from typing import BinaryIO
@@ -98,8 +111,19 @@ async def import_data_from_xls_file(
                 # Проверяем, существует ли заметка в БД
                 note_obj = await DataBase.get_note_by_data(session, title, text, bot.auth_user_id[chat_id])
 
-                # Если заметка существует, разбиваем примеры по разделителю и проверяем на наличие в таблице Context
+                # Если заметка существует:
                 if note_obj:
+
+                    # Если текст заметки был дополнен, обновляем в БД
+                    is_updated = False
+                    if note_obj.text != text:
+                        is_updated = await DataBase.update_note_by_id(session, note_obj.id, text=text)
+
+                        # Обновляем счётчик добавленных/изменённых заметок
+                        if is_updated:
+                            added += 1
+
+                    # Если есть примеры, разбиваем их по разделителю и проверяем на наличие в таблице Context
                     if examples:
                         new_examples = None
                         examples = [
@@ -116,7 +140,7 @@ async def import_data_from_xls_file(
                                 new_examples = True
 
                         # Обновляем счётчик добавленных/изменённых заметок
-                        if new_examples:
+                        if new_examples and not is_updated:
                             added += 1
 
                 # Если заметки нет в БД, создаём ее
@@ -163,14 +187,14 @@ async def import_data_from_xls_file(
                 # Проверяем, существует ли такая запись WordPhrase в БД (допускается расширение перевода)
                 word_phrase_obj = await DataBase.get_word_phrase_by_data(session, word, translate, topic.id)
 
-                # Если заметка существует, проверяем идентичность перевода. Если перевод был расширен, перезаписываем
+                # Если запись существует, проверяем идентичность перевода. Если перевод был расширен, перезаписываем
                 if word_phrase_obj:
                     is_updated = False
                     if translate != word_phrase_obj.translate:
                         upd_data = {'translate': translate}
                         is_updated = await DataBase.update_word_phrase(session, word_phrase_obj.id, upd_data)
 
-                        # Обновляем счётчик добавленных/изменённых заметок
+                        # Обновляем счётчик добавленных/изменённых записей
                         if is_updated:
                             added += 1
 

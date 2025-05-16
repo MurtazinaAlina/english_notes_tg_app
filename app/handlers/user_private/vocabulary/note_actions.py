@@ -4,10 +4,17 @@
 INFO:
 
 ПРОСМОТР ЗАМЕТОК:
-1. Заметки располагаются строго по 1 штуке на странице, не менять код. Контроллеры прописаны с этим расчетом.
-2. При просмотре заметки в state сохраняется ключ 'show_user_notes_cbq' с callback_data этой заметки, он используется в
+
+1. Есть 2 режима просмотра заметок:
+    - Режим полного просмотра. Заметки располагаются строго по 1 штуке на странице, с пагинацией. Выводится вся
+        информация о заметке. (Не менять код. Контроллеры прописаны с расчетом на 1 штуку)
+    - Режим просмотра заголовков. На странице располагаются только заголовки заметок (N штук), с возможностью открыть и
+        просмотреть заметку уже со всей информацией.
+2. Режимы свободно переключаются в 1 клик, при переключении сохраняется просматриваемая заметка (она открывается в
+   другом режиме без сброса страницы и перенаправления на первую). Это удобно для быстрого поиска нужной заметки.
+3. При просмотре заметки в state сохраняется ключ 'show_user_notes_cbq' с callback_data этой заметки, он используется в
    callback_data кнопок для отмены действий и возврата к просмотру заметки.
-3. Для снижения нагрузки на БД при входе в раздел заметки пользователя сохраняются в state  под ключом "user_notes", все
+4. Для снижения нагрузки на БД при входе в раздел заметки пользователя сохраняются в state  под ключом "user_notes", все
    заметки при пагинации подгружаются оттуда. Новая загрузка из БД происходит только при поиске/отмене поиска,
    добавлении/редактировании/удалении данных (при необходимости обновления данных заметок).
 
@@ -37,6 +44,7 @@ INFO:
    Context.
 """
 import html
+import math
 
 from aiogram import Router, F, types
 from aiogram.filters import StateFilter
@@ -47,16 +55,17 @@ from app.banners import banners_details
 from app.database.db import DataBase
 from app.database.models import Notes
 from app.filters.custom_filters import ChatTypeFilter, IsKeyInStateFilter, IsKeyNotInStateFilter
-from app.keyboards.inlines import get_inline_btns, get_kbds_with_navi_header_btns
+from app.keyboards.inlines import get_inline_btns, get_kbds_with_navi_header_btns, get_pagination_btns
 from app.utils.custom_bot_class import Bot
-from app.utils.paginator import Paginator
+from app.utils.paginator import Paginator, pages
 from app.common.tools import clear_auxiliary_msgs_in_chat, try_alert_msg, modify_callback_data, \
     validate_context_example, delete_last_message, update_note_msg_data, \
     delete_info_message, join_examples_in_unordered_list
 from app.common.msg_templates import context_example_msg_template, note_msg_template, oops_with_error_msg_template, \
-    oops_try_again_msg_template, context_validation_not_passed_msg_template
+    oops_try_again_msg_template, context_validation_not_passed_msg_template, action_cancelled_msg_template
 from app.common.fsm_classes import NotesFSM
-from app.settings import PLUG_TEMPLATE, MIN_NOTE_TITLE_LENGTH, MIN_NOTE_TEXT_LENGTH
+from app.settings import PLUG_TEMPLATE, MIN_NOTE_TITLE_LENGTH, MIN_NOTE_TEXT_LENGTH, PER_PAGE_NOTE_TITLES
+
 
 # Создаём роутер для приватного чата бота с пользователем
 note_router = Router()
@@ -65,21 +74,24 @@ note_router = Router()
 note_router.message.filter(ChatTypeFilter(['private']))
 
 
-# Просмотр заметок пользователя (всех или отфильтрованных по поиску).
+# Просмотр заметок пользователя (всех или отфильтрованных по поиску) в режиме полного просмотра.
+# Открытие заметки для детального просмотра из режима просмотра по заголовкам.
 # Здесь же обрабатывается перенаправление при отменах действия (удаления, редактирования, добавления, поиска) и
-# принудительный вызов после удаления/добавления заметок и ввода ключа для поиска.
-@note_router.callback_query(F.data.startswith('my_notes_page_') | F.data.startswith('cancel_search_notes'))
+# принудительный вызов после удаления/добавления заметок и ввода ключа для поиска (при режиме полного просмотра).
+@note_router.callback_query(F.data.startswith('my_notes_page_') | F.data.startswith('show_note_'))
 async def show_user_notes(callback: types.CallbackQuery, bot: Bot, session: AsyncSession, state: FSMContext) -> None:
     """
-    Просмотр заметок пользователя (всех или отфильтрованных по поиску).
+    Просмотр заметок пользователя (всех или отфильтрованных по поиску) в режиме полного просмотра.
+    Открытие заметки для детального просмотра из режима просмотра по заголовкам.
     Здесь же обрабатывается перенаправление при отменах действия (удаления, редактирования, добавления, поиска) и
-    принудительный вызов после удаления/добавления заметок и ввода ключа для поиска.
+    принудительный вызов после удаления/добавления заметок и ввода ключа для поиска (при режиме полного просмотра).
 
-    :param callback: Callback-запрос формата "my_notes_page_{page_number}", "cancel_search_notes"
+    :param callback: Callback-запрос формата: "my_notes_page_{page_number}", "cancel_search_notes",
+                    "show_note_6:10" (при просмотре из режима по заголовкам)
     :param bot: Объект бота
     :param session: Пользовательская сессия
     :param state: Контекст состояния с возможными ключами:
-                 'show_user_notes_cbq' с callback.data последней открытой заметки  - 'my_notes_page_1';
+                 'show_user_notes_cbq' с callback.data последней открытой заметки - 'my_notes_page_1'/ 'show_note_6:10';
                  'user_notes' со списком объектов заметок пользователя - [<Notes_object_1>, <Notes_object_2>, ...] или
                              None (при первом входе или если данные менялись);
                  'notes_search_keywords' c str ключом для поиска - 'Try to find me';
@@ -88,7 +100,10 @@ async def show_user_notes(callback: types.CallbackQuery, bot: Bot, session: Asyn
                  'info_msg' (если возврат из редактирования) c message-объектом информационного сообщения;
                  'add_example' (если возврат из редактирования с добавлением примера)
                  'new_note' (если возврат после добавления заметки) c объектом заметки - <Notes_object>;
-                 'title', 'text' (если отмена добавления заметки) c str названием и текстом
+                 'title', 'text' (если отмена добавления заметки) c str названием и текстом;
+                 'note_title_view_mode' (при просмотре из режима по заголовкам) c True;
+                 'title_mode_page' (при просмотре из режима по заголовкам) c callback.data последней просмотренной
+                    страницы заголовков
 
     :return: None
     """
@@ -97,15 +112,15 @@ async def show_user_notes(callback: types.CallbackQuery, bot: Bot, session: Asyn
     # Очищаем чат
     await clear_auxiliary_msgs_in_chat(bot, callback.message.chat.id)
 
-    # Сбрасываем состояние ввода
+    # Сбрасываем состояние ввода (на случаи возврата из редактирования)
     await state.set_state(None)
 
-    # Забираем из callback номер страницы
-    if callback.data == 'cancel_search_notes':
-        await state.clear()                                     # При отмене поиска сбрасываем контекст
-        page = 1
+    # Забираем из callback порядковый номер заметки (соответствует номеру страницы при просмотре по 1 шт.)
+    if 'show_note_' in callback.data:
+        note_id = int(callback.data.split(':')[-1])
+        note_number = int(callback.data.split(':')[0].split('_')[-1])      # Для 'show_note_{note_number}:{Note.id}'
     else:
-        page = int(callback.data.split('_')[-1])
+        note_number = int(callback.data.split('_')[-1])                    # Для 'my_notes_page_{note_number}'
 
     # Забираем данные из контекста
     state_data = await state.get_data()
@@ -113,7 +128,11 @@ async def show_user_notes(callback: types.CallbackQuery, bot: Bot, session: Asyn
     # Определяем ключевое слово для поиска
     search_filter = state_data.get('notes_search_keywords') if state_data.get('notes_search_keywords') else None
 
-    # При фильтрации по ключевому слову в поиске отправляем информационное сообщение
+    # Определяем режим просмотра и порядковый номер страницы просмотра по заголовкам (если есть)
+    title_view_mode = state_data.get('note_title_view_mode')
+    title_mode_page = state_data.get('title_mode_page')
+
+    # При фильтрации по ключевому слову в поиске отправляем в чат информационное сообщение
     if search_filter:
         msg = await callback.message.answer(f'<b>Вы ищете 🔎:</b> {search_filter}')
         bot.auxiliary_msgs['user_msgs'][callback.message.chat.id].append(msg)
@@ -123,7 +142,11 @@ async def show_user_notes(callback: types.CallbackQuery, bot: Bot, session: Asyn
         await state.clear()
         state_data = {}
         if search_filter:
-            await state.update_data(notes_search_keywords=search_filter)
+            await state.update_data(notes_search_keywords=search_filter)        # Возвращаем ключевое слово для поиска
+        if title_view_mode:
+            await state.update_data(note_title_view_mode=title_view_mode)       # Возвращаем режим просмотра
+        if title_mode_page:
+            await state.update_data(title_mode_page=title_mode_page)            # Возвращаем адрес страницы просмотра
 
     if state_data.get('new_note'):                              # Возврат на страницу после создания новой заметки
         await state.update_data(new_note=None)
@@ -134,11 +157,17 @@ async def show_user_notes(callback: types.CallbackQuery, bot: Bot, session: Asyn
     # Редактируем баннер и клавиатуру
     caption = banners_details.vcb_descrptn_notes
     search_btn = {'Отменить поиск ✖': 'cancel_search_notes'} if search_filter else {'Найти заметки 🔎': 'search_notes'}
-    btns = {'Добавить заметку ➕': 'add_new_note', **search_btn}
+    view_mode_btn = {'Режим просмотра заголовков 👓': 'note_change_view_mode'} if not title_view_mode else {
+        'Режим полного просмотра 📒': 'note_change_view_mode'}
+    btns = {
+        'Добавить заметку ➕': 'add_new_note',
+        **view_mode_btn,
+        **search_btn
+    }
     kbds = get_kbds_with_navi_header_btns(level=2, btns=btns, sizes=(2, 1))
     try:
-        await callback.message.edit_caption(caption=caption, reply_markup=kbds)
-    except (Exception,) as e:
+        await bot.auxiliary_msgs['cbq_msg'][callback.message.chat.id].edit_caption(caption=caption, reply_markup=kbds)
+    except (Exception, ) as e:
         print(e)
 
     # Сохраняем в контекст callback.data текущей страницы (для возврата при отмене и завершении)
@@ -157,36 +186,210 @@ async def show_user_notes(callback: types.CallbackQuery, bot: Bot, session: Asyn
         bot.auxiliary_msgs['user_msgs'][callback.message.chat.id].append(msg)
         return
 
-    # Забираем заметку по индексу (!) страницы. Работает при логике вывода по 1 заметке на страницу
-    try:
-        note = user_notes[page - 1]
-    except IndexError:        # Обрабатываем исключение, если была удалена последняя запись и такого индекса больше нет
-        page -= 1
-        note = user_notes[page - 1]
+    # Определяем объект заметки к отображению
+    if not title_view_mode:                                                     # Для режима полного просмотра
+        try:
+            note = user_notes[note_number - 1]                                  # Забираем заметку по порядковому номеру
+        except IndexError:      # Обрабатываем исключение, если была удалена последняя запись и такого номера больше нет
+            note_number -= 1
+            note = user_notes[note_number - 1]
+    else:                                                                       # Для режима просмотра заголовков
+        note = list(filter(lambda x: x.id == note_id, user_notes))[0]
 
     # Формируем сообщение с заметкой
     examples = join_examples_in_unordered_list(note)                            # Соединяем примеры по шаблону
     msg_text = note_msg_template.format(
-        page=page, len_user_notes=len(user_notes), note_title=html.escape(note.title), note_text=html.escape(note.text),
-        examples=examples
+        page=note_number, len_user_notes=len(user_notes), note_title=html.escape(note.title),
+        note_text=html.escape(note.text), examples=examples
     )
 
-    # Формируем клавиатуру с редактированием заметки, озвучкой примеров и пагинацией
+    # Формируем клавиатуру с редактированием заметки, озвучкой примеров
     btns = {
         'Редактировать 🖌': f'edit_note_{note.id}',
         'Удалить 🗑': f'delete_note_{note.id}',
         '🎧 Примеры': f'speak_note_example_{note.id}'
     }
-    paginator = Paginator(list(user_notes), page, per_page=1)
-    if paginator.has_previous():
-        btns["◀ Предыдущая"] = f"my_notes_page_{page - 1}"
-    if paginator.has_next():
-        btns["Следующая ▶"] = f"my_notes_page_{page + 1}"
+
+    # Добавляем кнопки пагинации/возврата в зависимости от режима
+    if not title_view_mode:
+        paginator = Paginator(list(user_notes), note_number, per_page=1)
+        if paginator.has_previous():
+            btns["◀ Предыдущая"] = f"my_notes_page_{note_number - 1}"
+        if paginator.has_next():
+            btns["Следующая ▶"] = f"my_notes_page_{note_number + 1}"
+    else:
+        btns["Вернуться к списку ⬅"] = title_mode_page                          # Возвращаемся к просмотру заголовков
+
     kbds = get_inline_btns(btns=btns, sizes=(2, 1, 2))
 
     # Отправляем сообщение с заметкой в чат
     msg = await callback.message.answer(text=msg_text, reply_markup=kbds)
     bot.auxiliary_msgs['user_msgs'][callback.message.chat.id].append(msg)
+
+
+# Просмотр заметок пользователя (всех или отфильтрованных по поиску) в режиме просмотра по заголовкам.
+# Здесь же обрабатывается перенаправление при отменах действия (удаления, добавления, поиска) и
+# принудительный вызов после удаления/добавления заметок и ввода ключа для поиска (при режиме просмотра по заголовкам).
+@note_router.callback_query(F.data.startswith('note_title_view_mode_page_'))
+async def note_title_view_mode(callback: types.CallbackQuery, state: FSMContext, bot: Bot, session: AsyncSession) \
+        -> None:
+    """
+    Просмотр заметок пользователя (всех или отфильтрованных по поиску) в режиме просмотра по заголовкам.
+    Здесь же обрабатывается перенаправление при отменах действия (удаления, добавления, поиска) и принудительный вызов
+    после удаления/добавления заметок и ввода ключа для поиска (при режиме просмотра по заголовкам).
+
+    :param callback: CallbackQuery-запрос формата "note_title_view_mode_page_<page_number>"
+    :param state: Контекст состояния FSM с возможными ключами:
+                 'show_user_notes_cbq' с callback.data последней открытой заметки - 'my_notes_page_1'/ 'show_note_6:10';
+                 'user_notes' со списком объектов заметок пользователя - [<Notes_object_1>, <Notes_object_2>, ...] или
+                             None (при первом входе или если данные менялись);
+                 'notes_search_keywords' c str ключом для поиска - 'Try to find me';
+                 'new_note' (если возврат после добавления заметки) c объектом заметки - <Notes_object>;
+                 'title', 'text' (если отмена добавления заметки) c str названием и текстом;
+                 'note_title_view_mode' (при пагинации, принудительном вызове) c True;
+                 'title_mode_page' (при пагинации, принудительном вызове) c callback.data последней просмотренной
+                    страницы заголовков
+    :param bot: Объект бота
+    :param session: Пользовательская сессия
+    :return: None
+    """
+    bot.auxiliary_msgs['cbq'][callback.message.chat.id] = callback
+
+    # Добавляем в state ключ режим просмотра по заголовкам и callback.data текущей страницы
+    await state.update_data(note_title_view_mode=True)
+    await state.update_data(title_mode_page=callback.data)
+
+    # Очищаем чат
+    await clear_auxiliary_msgs_in_chat(bot, callback.message.chat.id)
+
+    # Сбрасываем состояние ввода (на случаи возврата из редактирования)
+    await state.set_state(None)
+
+    # Забираем данные из контекста
+    state_data = await state.get_data()
+
+    # Определяем ключевое слово для поиска (если есть)
+    search_filter = state_data.get('notes_search_keywords') if state_data.get('notes_search_keywords') else None
+
+    # При фильтрации по ключевому слову в поиске отправляем информационное сообщение
+    if search_filter:
+        msg = await callback.message.answer(f'<b>Вы ищете 🔎:</b> {search_filter}')
+        bot.auxiliary_msgs['user_msgs'][callback.message.chat.id].append(msg)
+
+    # Редактируем клавиатуру баннера
+    search_btn = {'Отменить поиск ✖': 'cancel_search_notes'} if search_filter else {'Найти заметки 🔎': 'search_notes'}
+    title_view_mode = state_data.get('note_title_view_mode')
+    view_mode_btn = {'Режим просмотра заголовков 👓': 'note_change_view_mode'} if not title_view_mode else {
+        'Режим полного просмотра 📒': 'note_change_view_mode'}
+    btns = {
+        'Добавить заметку ➕': 'add_new_note',
+        **view_mode_btn,
+        **search_btn
+    }
+    kbds = get_kbds_with_navi_header_btns(level=2, btns=btns, sizes=(2, 1))
+    try:
+        await bot.auxiliary_msgs['cbq_msg'][callback.message.chat.id].edit_reply_markup(reply_markup=kbds)
+    except (Exception, ) as e:
+        print(e)
+
+    # При входе в раздел (или после изменений) сохраняем данные из БД в контекст.
+    # При пагинации используем данные из контекста
+    user_notes = state_data.get('user_notes')
+    if not user_notes:
+        user_notes = await DataBase.get_user_notes(session, bot.auth_user_id[callback.message.chat.id], search_filter)
+        await state.update_data(user_notes=user_notes)
+
+    # Получаем номер текущей страницы из callback.data
+    page = int(callback.data.split('_')[-1])
+
+    # Получаем список заметок для текущей страницы
+    paginator = Paginator(list(user_notes), page, per_page=PER_PAGE_NOTE_TITLES)
+    current_page_notes = paginator.get_page()
+
+    # Отправляем информационные сообщения с заголовками заметок текущей страницы и доступом к их просмотру
+    for ind, note in enumerate(current_page_notes):
+        note_counter = (ind + 1) + (page - 1) * PER_PAGE_NOTE_TITLES
+        btns = {'📖 Открыть информацию о заметке': f'show_note_{note_counter}:{note.id}'}
+        kbds = get_inline_btns(btns=btns, sizes=(2, 1, 2))
+        msg_text = f"▪ Заметка #<b>{note_counter}</b> из <b>{len(user_notes)}</b>:\n<b>{str(note.title)}</b>"
+        msg = await callback.message.answer(text=msg_text, reply_markup=kbds)
+        bot.auxiliary_msgs['user_msgs'][callback.message.chat.id].append(msg)
+
+    # Отправляем информационное сообщение с пагинацией
+    pagi_kbds = get_pagination_btns(pages(paginator), page=page, custom_cb_data='note_title_view_mode')
+    msg_text = f'Страница <b>{page}</b> из <b>{paginator.pages}</b>'
+    msg = await callback.message.answer(text=msg_text, reply_markup=pagi_kbds)
+    bot.auxiliary_msgs['user_msgs'][callback.message.chat.id].append(msg)
+
+
+# Переключение режима просмотра заметок
+@note_router.callback_query(F.data.startswith('note_change_view_mode'))
+async def change_note_view_mode(callback: types.CallbackQuery, state: FSMContext, bot: Bot, session: AsyncSession) \
+        -> None:
+    """
+    Переключение режима просмотра заметок.
+
+    :param callback: CallbackQuery-запрос формата "note_change_view_mode"
+    :param state: Контекст состояния FSM с ключами:
+                    'show_user_notes_cbq': callback.data последней просмотренной заметки;
+                    'note_title_view_mode' (опционально): режим просмотра заголовков;
+                    'title_mode_page' (опционально): callback.data последней просмотренной страницы заголовков;
+                    'notes_search_keywords' (опционально): ключ для поиска
+    :param bot: Объект бота
+    :param session: Пользовательская сессия
+    :return: None
+    """
+
+    # Забираем данные из контекста
+    state_data = await state.get_data()
+    notes_search_keywords = state_data.get('notes_search_keywords')     # Ключ для поиска
+    show_user_notes_cbq = state_data.get('show_user_notes_cbq')         # callback.data последней просмотренной заметки
+    title_view_mode = state_data.get('note_title_view_mode')       # Режим просмотра заголовков
+
+    # Переключаем режим просмотра заголовков на режим полного просмотра
+    if title_view_mode:
+        try:
+            # Определяем номер последней просмотренной заметки
+            current_note = show_user_notes_cbq.split(':')[0].split('_')[-1]        # show_note_{note_number}:{Notes.id}
+        except AttributeError:
+            await callback.answer('⚠️ Сначала выберите заметку!', show_alert=True)
+            return
+
+        # Очищаем контекст
+        await state.clear()
+
+        # Сохраняем фильтр поиска при переключении режимов
+        if notes_search_keywords:
+            await state.update_data(notes_search_keywords=notes_search_keywords)
+
+        # Вызываем функцию просмотра заметки
+        modified_callback = await modify_callback_data(
+            bot.auxiliary_msgs['cbq'][callback.message.chat.id], f'my_notes_page_{current_note}'
+        )
+        await show_user_notes(modified_callback, bot, session, state)
+
+    # Переключаем режим полного просмотра на режим просмотра заголовков
+    else:
+        try:
+            # Определяем номер последней просмотренной заметки
+            current_note_number = int(show_user_notes_cbq.split('_')[-1])                # my_notes_page_{note_number}
+
+            # Определяем номер необходимой страницы просмотра заголовков
+            page = math.ceil(current_note_number / PER_PAGE_NOTE_TITLES)
+        except AttributeError:
+            await callback.answer('⚠️ Сначала выберите заметку!', show_alert=True)
+            return
+
+        # Очищаем контекст
+        await state.clear()
+
+        # Сохраняем фильтр поиска при переключении режимов
+        if notes_search_keywords:
+            await state.update_data(notes_search_keywords=notes_search_keywords)
+
+        # Вызываем функцию просмотра заголовков
+        modified_callback = await modify_callback_data(callback, f'note_title_view_mode_page_{page}')
+        await note_title_view_mode(modified_callback, state, bot, session)
 
 
 # УДАЛЕНИЕ ЗАМЕТКИ
@@ -247,19 +450,23 @@ async def delete_note_get_confirm(callback: types.CallbackQuery, session: AsyncS
 
         # Выводим пользователю сообщение с результатом и удаляем информационное сообщение
         if is_deleted:
-            await callback.answer(f'Заметка "{is_deleted}" удалена', show_alert=True)
+            await callback.answer(f'✅ Заметка "{is_deleted}" удалена', show_alert=True)
             await callback.bot.delete_message(chat_id=callback.message.chat.id, message_id=callback.message.message_id)
 
             # Удаляем данные о заметках из контекста, чтобы обновились при возврате на страницу
             await state.update_data(user_notes=None)
 
-            # Забираем из контекста данные последней просмотренной страницы для возврата
+            # Забираем из контекста данные для определения страницы перенаправления
             state_data = await state.get_data()
-            show_user_notes_cbq = state_data.get('show_user_notes_cbq')
+            redirect_page = state_data.get('title_mode_page') if state_data.get(
+                'note_title_view_mode') else state_data.get('show_user_notes_cbq')
 
-            # Возвращаемся к последней просмотренной странице
-            modified_callback = await modify_callback_data(callback, show_user_notes_cbq)
-            await show_user_notes(modified_callback, bot, session, state)
+            # Перенаправляем пользователя на нужную страницу в зависимости от режима просмотра
+            modified_callback = await modify_callback_data(callback, redirect_page)
+            if state_data.get('note_title_view_mode'):
+                await note_title_view_mode(modified_callback, state, bot, session)
+            else:
+                await show_user_notes(modified_callback, bot, session, state)
 
         # Обрабатываем ошибку, если заметка не найдена
         else:
@@ -289,11 +496,12 @@ async def add_new_note_ask_title(callback: types.CallbackQuery, bot: Bot, state:
 
     # Забираем из контекста данные последней просмотренной страницы для кнопки отмены
     state_data = await state.get_data()
-    show_user_notes_cbq = state_data.get('show_user_notes_cbq')
+    cancelling_page = state_data.get('title_mode_page') if state_data.get('note_title_view_mode') else state_data.get(
+        'show_user_notes_cbq')
 
     # Редактируем баннер и клавиатуру
     caption = banners_details.add_new_note_step_1
-    btns = {'Отмена ❌': show_user_notes_cbq}
+    btns = {'Отмена ❌': cancelling_page}
     kbds = get_kbds_with_navi_header_btns(level=2, btns=btns, sizes=(2, 1))
     try:
         await callback.message.edit_caption(caption=caption, reply_markup=kbds)
@@ -397,6 +605,7 @@ async def add_new_note_get_example(message: types.Message, bot: Bot, state: FSMC
     :param state: Контекст состояния FSM с данными для создания заметки, ключом "show_user_notes_cbq" для возврата к
            заметкам и (опционально) ключом "new_note" для добавления дополнительных примеров к уже созданной заметке.
            Строго БЕЗ ключа 'edited_note' для разделения логики контроллеров с добавлением заметки при редактировании.
+           Опционально - с ключом 'note_title_view_mode' при режиме просмотра по заголовкам.
     :param session: Пользовательская сессия
     :return: None
     """
@@ -455,11 +664,15 @@ async def add_new_note_get_example(message: types.Message, bot: Bot, state: FSMC
     # Очищаем чат
     await clear_auxiliary_msgs_in_chat(bot, message.chat.id)
 
+    # Забираем из контекста данные режима просмотра для определения страницы перенаправления
+    title_view_mode = state_data.get('note_title_view_mode')
+    redirect_page = 'note_title_view_mode_page_1' if title_view_mode else 'my_notes_page_1'
+
     # Редактируем баннер и клавиатуру
     caption = banners_details.add_new_note_step_4.format(title=new_note.title)
     btns = {
         'Добавить ещё пример ➕': f'add_example_to_new_note_{new_note.id}',
-        'Вернуться к записям': 'my_notes_page_1'
+        'Вернуться к записям': redirect_page
     }
     kbds = get_kbds_with_navi_header_btns(level=2, btns=btns, sizes=(2, 1))
     try:
@@ -479,20 +692,22 @@ async def add_new_note_get_example(message: types.Message, bot: Bot, state: FSMC
     msg = await message.answer(msg_text)
     bot.auxiliary_msgs['user_msgs'][message.chat.id].append(msg)
 
-    # Сбрасываем контекст и добавляем туда созданную заметку на случай добавления дополнительных примеров
+    # Сбрасываем контекст и добавляем туда созданную заметку на случай добавления дополнительных примеров и режим
     await state.clear()
-    await state.update_data(new_note=new_note)
+    await state.update_data(new_note=new_note, note_title_view_mode=title_view_mode)
 
 
 # Добавление новой заметки - ШАГ 5, добавление дополнительных (2+) примеров; запрос текста примера.
-@note_router.callback_query(F.data.startswith('add_example_to_new_note_'))
+@note_router.callback_query(F.data.startswith('add_example_to_new_note_'), IsKeyInStateFilter('new_note'))
 async def add_example_to_note(callback: types.CallbackQuery, bot: Bot, state: FSMContext) -> None:
     """
     Добавление новой заметки - ШАГ 5, добавление дополнительных (2+) примеров; запрос текста примера.
 
     :param callback: CallbackQuery-запрос формата "add_example_to_new_note_<Note.id>"
     :param bot: Объект бота
-    :param state: Контекст состояния FSM
+    :param state: Контекст состояния FSM с ключами:
+                    - "new_note" (обязательно): Объект заметки;
+                    - "note_title_view_mode" (опционально): Режим просмотра названий заметок
     :return: None
     """
     bot.auxiliary_msgs['cbq'][callback.message.chat.id] = callback
@@ -500,13 +715,17 @@ async def add_example_to_note(callback: types.CallbackQuery, bot: Bot, state: FS
     # Очищаем чат
     await clear_auxiliary_msgs_in_chat(bot, callback.message.chat.id)
 
+    # Забираем из контекста данные для кнопки отмены действия
+    state_data = await state.get_data()
+    cancelling_page = state_data.get('title_mode_page') if state_data.get('note_title_view_mode') else 'my_notes_page_1'
+
     # Редактируем баннер и клавиатуру
     caption = banners_details.add_new_note_add_example
-    btns = {'Отмена ✖': 'my_notes_page_1'}
+    btns = {'Отмена ✖': cancelling_page}
     kbds = get_kbds_with_navi_header_btns(level=2, btns=btns, sizes=(2, 1))
     try:
         await bot.auxiliary_msgs['cbq_msg'][callback.message.chat.id].edit_caption(caption=caption, reply_markup=kbds)
-    except Exception as e:
+    except (Exception, ) as e:
         print(e)
 
     # Устанавливаем состояние ввода примера к заметке
@@ -516,27 +735,32 @@ async def add_example_to_note(callback: types.CallbackQuery, bot: Bot, state: FS
 # ПОИСК ЗАМЕТОК
 
 # Поиск заметок - ШАГ 1, запрос ключевого слова
-@note_router.callback_query(F.data == 'search_notes', IsKeyInStateFilter('show_user_notes_cbq'))
+@note_router.callback_query(F.data == 'search_notes')
 async def search_notes_ask_keywords(callback: types.CallbackQuery, bot: Bot, state: FSMContext) -> None:
     """
     Поиск заметок - ШАГ 1, запрос ключевого слова.
 
     :param callback: CallbackQuery-запрос формата "search_notes"
     :param bot: Объект бота
-    :param state: Контекст состояния FSM с ключом "show_user_notes_cbq" для возврата к просмотру заметок
-    :return:
+    :param state: Контекст состояния FSM с возможными ключами:
+                    - "note_title_view_mode" (опционально): Режим просмотра заметок по заголовкам
+                    - "title_mode_page" (опционально): Последняя страница просмотра заметок по заголовкам
+                    - "show_user_notes_cbq" (опционально): Последняя просмотренная заметка в режиме полного просмотра
+    :return: None
     """
-
     bot.auxiliary_msgs['cbq'][callback.message.chat.id] = callback
 
     # Очищаем чат
     await clear_auxiliary_msgs_in_chat(bot, callback.message.chat.id)
 
+    # Забираем из state данные для определения страницы отмены действия
+    state_data = await state.get_data()
+    cancelling_page = state_data.get('title_mode_page') if state_data.get('note_title_view_mode') else state_data.get(
+        'show_user_notes_cbq')
+
     # Отправляем информационное сообщение с кнопкой отмены
     msg_text = 'Введите текст для поиска в названии или тексте заметки'
-    state_data = await state.get_data()
-    show_user_notes_cbq = state_data.get('show_user_notes_cbq')
-    btns = {'Отмена ✖': show_user_notes_cbq}
+    btns = {'Отмена ✖': cancelling_page}
     kbds = get_inline_btns(btns=btns)
     msg = await callback.message.answer(msg_text, reply_markup=kbds)
     bot.auxiliary_msgs['user_msgs'][callback.message.chat.id].append(msg)
@@ -553,7 +777,8 @@ async def search_notes_get_keywords(message: types.Message, bot: Bot, state: FSM
 
     :param message: Текстовое сообщение с ключевым словом/фразой для поиска
     :param bot: Объект бота
-    :param state: Контекст состояния FSM
+    :param state: Контекст состояния FSM с возможными ключами:
+                    - "note_title_view_mode" (опционально): Режим просмотра заметок по заголовкам
     :param session: Пользовательская сессия
     :return: None
     """
@@ -568,9 +793,47 @@ async def search_notes_get_keywords(message: types.Message, bot: Bot, state: FSM
     # Удаляем из контекста заметки пользователя для их обновления
     await state.update_data(user_notes=None)
 
-    # Вызываем функцию показа заметок
-    modified_callback = await modify_callback_data(bot.auxiliary_msgs['cbq'][message.chat.id], 'my_notes_page_1')
-    await show_user_notes(modified_callback, bot, session, state)
+    # Забираем из контекста данные для определения страницы перенаправления
+    state_data = await state.get_data()
+    new_callback = 'note_title_view_mode_page_1' if state_data.get('note_title_view_mode') else 'my_notes_page_1'
+
+    # Вызываем необходимую функцию показа заметок в зависимости от режима
+    modified_callback = await modify_callback_data(bot.auxiliary_msgs['cbq'][message.chat.id], new_callback)
+    if state_data.get('note_title_view_mode'):
+        await note_title_view_mode(modified_callback, state, bot, session)
+    else:
+        await show_user_notes(modified_callback, bot, session, state)
+
+
+# Отмена поиска заметок
+@note_router.callback_query(F.data == 'cancel_search_notes', IsKeyInStateFilter('notes_search_keywords'))
+async def cancel_search_notes(callback: types.CallbackQuery, bot: Bot, state: FSMContext, session: AsyncSession) \
+        -> None:
+    """
+    Отмена поиска заметок.
+
+    :param callback: CallbackQuery-запрос формата "cancel_search_notes"
+    :param bot: Объект бота
+    :param state: Контекст состояния FSM с возможными ключами:
+                    - "note_title_view_mode" (опционально): Режим просмотра заметок по заголовкам
+    :param session: Пользовательская сессия
+    :return: None
+    """
+    await callback.answer(action_cancelled_msg_template, show_alert=True)
+
+    # Удаляем из контекста ключ для поиска и отфильтрованные заметки пользователя
+    await state.update_data(notes_search_keywords=None, user_notes=None)
+
+    # Забираем из контекста данные для определения страницы перенаправления в зависимости от режима
+    state_data = await state.get_data()
+    new_callback = 'note_title_view_mode_page_1' if state_data.get('note_title_view_mode') else 'my_notes_page_1'
+
+    # Вызываем необходимую функцию показа заметок в зависимости от режима
+    modified_callback = await modify_callback_data(bot.auxiliary_msgs['cbq'][callback.message.chat.id], new_callback)
+    if state_data.get('note_title_view_mode'):
+        await note_title_view_mode(modified_callback, state, bot, session)
+    else:
+        await show_user_notes(modified_callback, bot, session, state)
 
 
 # РЕДАКТИРОВАНИЕ ЗАМЕТКИ
@@ -585,7 +848,10 @@ async def edit_note_main(callback: types.CallbackQuery, bot: Bot, state: FSMCont
 
     :param callback: CallbackQuery-запрос формата "edit_note_<Notes.id>" (или иное, если был принудительный вызов)
     :param bot: Объект бота
-    :param state: Контекст состояния FSM
+    :param state: Контекст состояния FSM с ключами:
+                    - "show_user_notes_cbq": С callback.data страницы возврата
+                    - "edited_note" (опционально): При принудительном вызове после редактирования
+                    - "audio_examples" (опционально): При вызове редактирования при наличии аудио примеров в чате
     :param session: Пользовательская сессия
     :return: None
     """
