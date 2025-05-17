@@ -159,8 +159,8 @@ async def clear_audio_examples_from_chat(
             for audio_example in list(audio_examples_in_chat.values())[0]:
                 try:
                     await bot.delete_message(callback.message.chat.id, audio_example.message_id)
-                except Exception as e:
-                    await callback.answer(str(e), show_alert=True)
+                except (Exception, ) as e:
+                    print(e)
             audio_examples = {entity_id: []}
             await state.update_data(audio_examples=audio_examples)
 
